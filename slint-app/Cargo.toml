@@ -25,9 +25,18 @@ anyhow = "1.0.104"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "process"] }
 tracing = { version = "0.1.44", features = ["log"] }
 
-# Slint from master: this build uses FlexboxLayout and the per-item
-# cross-axis-self-alignment property, neither of which is in a release yet.
-slint = { git = "https://github.com/slint-ui/slint", branch = "master", default-features = false, features = [
+# Slint from git: this build uses FlexboxLayout and the per-item
+# cross-axis-self-alignment property, and the newest release is 1.17.1, which
+# has neither. Switch to a version requirement once 1.18 ships.
+#
+# Pinned to an exact rev rather than `branch = "master"`. The lockfile pins it
+# either way, but with a branch any `cargo update` silently moves this onto a
+# different API — on someone else's main branch, which is not a thing to be
+# moved onto by accident. Bumping it is then a commit that says so.
+#
+# 9405a2d is 2026-09-15; every one of the 19 crates from this repository
+# resolves to it.
+slint = { git = "https://github.com/slint-ui/slint", rev = "9405a2df5d9a3662e005909b44e3941ca47c2f47", default-features = false, features = [
     "compat-1-2",
     "std",
 ] }
@@ -36,14 +45,14 @@ libc = "0.2.189"
 # The same UI runs on the desktop against a locally running daemon, which is
 # how it is iterated on without a phone attached.
 [target.'cfg(not(target_os = "android"))'.dependencies]
-slint = { git = "https://github.com/slint-ui/slint", branch = "master", default-features = false, features = ["backend-winit", "renderer-femtovg"] }
+slint = { git = "https://github.com/slint-ui/slint", rev = "9405a2df5d9a3662e005909b44e3941ca47c2f47", default-features = false, features = ["backend-winit", "renderer-femtovg"] }
 tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 # Only for the harness's --snapshot flag, which renders the window to a file
 # so the UI can be reviewed without capturing the developer's screen.
 png = "0.18"
 
 [target.'cfg(target_os = "android")'.dependencies]
-slint = { git = "https://github.com/slint-ui/slint", branch = "master", default-features = false, features = ["backend-android-activity-06", "renderer-skia"] }
+slint = { git = "https://github.com/slint-ui/slint", rev = "9405a2df5d9a3662e005909b44e3941ca47c2f47", default-features = false, features = ["backend-android-activity-06", "renderer-skia"] }
 # The same jni version Slint's own Android backend uses, so there is one
 # JavaVM binding in the process rather than two incompatible ones.
 jni = "0.22"
@@ -51,7 +60,7 @@ android_logger = "0.15"
 log = "0.4"
 
 [build-dependencies]
-slint-build = { git = "https://github.com/slint-ui/slint", branch = "master" }
+slint-build = { git = "https://github.com/slint-ui/slint", rev = "9405a2df5d9a3662e005909b44e3941ca47c2f47" }
 
 [package.metadata.android]
 package = "dev.okhsunrog.netdiag.slint"

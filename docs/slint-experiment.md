@@ -7,14 +7,20 @@ what that actually cost and bought.
 
 [Slint]: https://slint.dev
 
-Built against Slint `master` (1.18.0-unreleased), because `FlexboxLayout` and
-the per-item `cross-axis-self-alignment` property are not in a release yet.
-Verified against `bf511bc` and again against `9405a2df`, so it is not pinned to
-one exact revision; `slint-app/Cargo.lock` records what a given build used.
+Built against Slint from git (1.18.0-unreleased), because `FlexboxLayout` and
+the per-item `cross-axis-self-alignment` property are in no release yet — the
+newest is 1.17.1. It worked against `bf511bc` and again against `9405a2df`, so
+it does not depend on one exact revision, but the manifest now **pins** that
+revision rather than following `master`.
 
-`slint-app/` is deliberately **its own cargo workspace**. Tracking someone's
-master branch should not sit in the daemon's dependency graph, and the daemon's
-CI should never have to fetch it.
+The lockfile pinned it either way; what a branch leaves open is that `cargo
+update` moves the app onto a different commit of someone else's main branch
+without anyone deciding to. With a `rev` that becomes a commit that says so.
+Once 1.18 ships this becomes an ordinary version requirement.
+
+`slint-app/` is deliberately **its own cargo workspace**. A dependency on a git
+revision of someone's development branch should not sit in the daemon's
+dependency graph, and the daemon's CI should never have to fetch it.
 
 The APK is built with [`cargo-rapk`], which unlike `cargo-apk` compiles this
 app's Java into the APK:
