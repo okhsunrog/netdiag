@@ -1,0 +1,17 @@
+[package]
+name = "netdiag-ipc"
+version = "0.1.0"
+edition = "2024"
+description = "Shared netdiag IPC contract: generated protobuf types, framing, and client"
+license = "GPL-3.0-or-later"
+
+[dependencies]
+anyhow = { workspace = true }
+bytes = { workspace = true }
+libc = { workspace = true }
+prost = { workspace = true }
+tokio = { workspace = true, features = ["net", "io-util", "sync", "time", "rt"] }
+tracing = { workspace = true }
+
+[build-dependencies]
+prost-build = { workspace = true }

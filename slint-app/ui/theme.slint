@@ -1,0 +1,133 @@
+// Shared visual vocabulary.
+//
+// Status colours are defined here rather than taken from a widget style for
+// the same reason as in the Compose build: pass/fail/warn must read the same
+// way regardless of platform theming, and must not shift when the system
+// palette does.
+
+export global Palette {
+    in-out property <bool> dark: true;
+
+    out property <brush> background: root.dark ? #14110f : #fdfbf9;
+    out property <brush> surface: root.dark ? #1e1a18 : #ffffff;
+    out property <brush> surface-alt: root.dark ? #262120 : #f4f1ef;
+    out property <brush> on-surface: root.dark ? #ece0da : #201a18;
+    out property <brush> on-surface-dim: root.dark ? #a2938c : #5c514c;
+    out property <brush> outline: root.dark ? #3a3230 : #ded3ce;
+    out property <brush> accent: root.dark ? #ffb59b : #8c4f35;
+
+    out property <brush> pass: root.dark ? #81c784 : #1b5e20;
+    out property <brush> fail: root.dark ? #ef9a9a : #b3261e;
+    out property <brush> warn: root.dark ? #ffb74d : #8a5100;
+    out property <brush> info: root.dark ? #90caf9 : #1a4d7a;
+    out property <brush> skip: root.dark ? #9aa0a6 : #5f6368;
+
+    // Addresses, routing rules and socket tuples are compared character by
+    // character, so they are never rendered in a proportional font.
+    out property <string> mono: "monospace";
+    out property <length> mono-size: 12px;
+}
+
+export enum Status { pass, fail, warn, info, skip }
+
+export global Style {
+    pure public function color-for(status: Status) -> brush {
+        return status == Status.pass ? Palette.pass
+            : status == Status.fail ? Palette.fail
+            : status == Status.warn ? Palette.warn
+            : status == Status.info ? Palette.info
+            : Palette.skip;
+    }
+}
+
+// A small coloured badge. Sized to its text so a FlexboxLayout can wrap a row
+// of them.
+export component Chip inherits Rectangle {
+    in property <string> text;
+    in property <Status> status: Status.info;
+
+    background: Style.color-for(root.status).with-alpha(0.16);
+    border-radius: 6px;
+    horizontal-stretch: 0;
+
+    HorizontalLayout {
+        padding-left: 8px;
+        padding-right: 8px;
+        padding-top: 3px;
+        padding-bottom: 3px;
+        Text {
+            text: root.text;
+            color: Style.color-for(root.status);
+            font-family: Palette.mono;
+            font-size: 11px;
+            font-weight: 700;
+        }
+    }
+}
+
+export component MonoText inherits Text {
+    color: Palette.on-surface;
+    font-family: Palette.mono;
+    font-size: Palette.mono-size;
+    wrap: no-wrap;
+    overflow: elide;
+}
+
+// A label/value row. The label column is fixed so values line up down the card.
+export component KeyValue inherits HorizontalLayout {
+    in property <string> key;
+    in property <string> value;
+    in property <brush> value-color: Palette.on-surface;
+    in property <bool> mono: true;
+
+    spacing: 8px;
+
+    Text {
+        text: root.key;
+        color: Palette.on-surface-dim;
+        font-size: 13px;
+        width: 128px;
+        wrap: word-wrap;
+    }
+
+    Text {
+        text: root.value;
+        color: root.value-color;
+        font-family: root.mono ? Palette.mono : "";
+        font-size: root.mono ? Palette.mono-size : 13px;
+        horizontal-stretch: 1;
+        wrap: word-wrap;
+    }
+}
+
+export component Card inherits Rectangle {
+    in property <string> title;
+    in property <string> subtitle;
+
+    background: Palette.surface;
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: Palette.outline;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 8px;
+
+        if root.title != "": Text {
+            text: root.title;
+            color: Palette.on-surface;
+            font-size: 15px;
+            font-weight: 700;
+            wrap: word-wrap;
+        }
+
+        if root.subtitle != "": Text {
+            text: root.subtitle;
+            color: Palette.on-surface-dim;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
+        @children
+    }
+}

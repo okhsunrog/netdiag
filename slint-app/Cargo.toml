@@ -1,0 +1,81 @@
+[package]
+name = "netdiag-slint"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+description = "Slint frontend for the Android Network Inspector"
+
+# Android entry points live in a cdylib loaded by NativeActivity; there is no
+# main().
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+# Desktop harness: same UI, same client, talks to a daemon on this machine.
+[[bin]]
+name = "netdiag-slint-desktop"
+path = "src/bin/desktop.rs"
+
+[dependencies]
+netdiag-ipc = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "process"] }
+tracing = { workspace = true }
+
+# Slint from master: this build uses FlexboxLayout and the per-item
+# cross-axis-self-alignment property, neither of which is in a release yet.
+slint = { git = "https://github.com/slint-ui/slint", branch = "master", default-features = false, features = [
+    "compat-1-2",
+    "std",
+] }
+
+# The same UI runs on the desktop against a locally running daemon, which is
+# how it is iterated on without a phone attached.
+[target.'cfg(not(target_os = "android"))'.dependencies]
+slint = { git = "https://github.com/slint-ui/slint", branch = "master", default-features = false, features = ["backend-winit", "renderer-femtovg"] }
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
+# Only for the harness's --snapshot flag, which renders the window to a file
+# so the UI can be reviewed without capturing the developer's screen.
+png = "0.18"
+
+[target.'cfg(target_os = "android")'.dependencies]
+slint = { git = "https://github.com/slint-ui/slint", branch = "master", default-features = false, features = ["backend-android-activity-06", "renderer-skia"] }
+# The same jni version Slint's own Android backend uses, so there is one
+# JavaVM binding in the process rather than two incompatible ones.
+jni = "0.22"
+android_logger = "0.15"
+log = "0.4"
+libc = { workspace = true }
+
+[build-dependencies]
+slint-build = { git = "https://github.com/slint-ui/slint", branch = "master" }
+
+[package.metadata.android]
+package = "dev.okhsunrog.netdiag.slint"
+build_targets = ["aarch64-linux-android"]
+# The daemon binary rides along as a "native library" for the same reason as in
+# the Compose build: the installer only extracts and marks executable the files
+# matching lib*.so.
+runtime_libs = "runtime-libs"
+
+[package.metadata.android.sdk]
+min_sdk_version = 31
+target_sdk_version = 34
+compile_sdk_version = 34
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.INTERNET"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.ACCESS_NETWORK_STATE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.ACCESS_WIFI_STATE"
+
+[[package.metadata.android.uses_permission]]
+name = "android.permission.QUERY_ALL_PACKAGES"
+
+[package.metadata.android.application]
+label = "Net Inspector (Slint)"
+# The daemon must be a real file on disk for su to exec it.
+extract_native_libs = true
+debuggable = true

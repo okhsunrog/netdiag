@@ -121,11 +121,19 @@ Disagreement  the framework says this app is inside the VPN, but the kernel
 ## Repository layout
 
 ```text
-proto/      the API. Single source of truth for both sides.
-daemon/     the Rust root daemon (netdiagd).
-android/    the Compose app.
-scripts/    build-daemon.sh — cross-compiles the daemon into the APK.
+proto/              the API. Single source of truth for every frontend.
+crates/netdiag-ipc/ generated Rust types, framing and client, shared by the
+                    daemon and the Slint app.
+daemon/             the Rust root daemon (netdiagd).
+android/            the Compose app (the primary frontend).
+slint-app/          a second frontend in Slint; see docs/slint-experiment.md.
+scripts/            build-daemon.sh — cross-compiles the daemon into the APK.
 ```
+
+There are two frontends because the second one was an experiment in writing the
+UI in Rust. The Compose app is the one to use; [docs/slint-experiment.md](docs/slint-experiment.md)
+records what the Slint version cost and bought, including the parts that came
+out worse.
 
 ## The API is the contract
 
@@ -211,8 +219,16 @@ adb shell 'su -c "/data/local/tmp/netdiagd --self-test"'
 ### Tests
 
 ```sh
-cd daemon && cargo test          # 127 unit tests, no device needed
-cd proto  && buf lint && buf breaking --against '.git#branch=main'
+cargo test --workspace           # 138 unit tests, no device needed
+cd proto && buf lint && buf breaking --against '../.git#branch=main,subdir=proto'
+```
+
+The Slint frontend also runs on the desktop against a daemon on the development
+machine, which is the quickest way to look at the UI:
+
+```sh
+sudo ./target/debug/netdiagd --socket @netdiag --allow-uid "$(id -u)"
+cargo run -p netdiag-slint --bin netdiag-slint-desktop -- --connect
 ```
 
 The daemon's tests are pure functions over parsing, filtering and the rule

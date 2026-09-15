@@ -16,10 +16,14 @@ mod daemon;
 mod diag;
 mod ipc;
 mod probe;
-mod proto;
 mod snapshot;
 mod util;
 mod watch;
+
+/// The generated protocol types live in the shared `netdiag-ipc` crate so both
+/// this daemon and the Slint frontend use exactly the same ones. Re-exported
+/// here because every module refers to them as `crate::proto`.
+pub use netdiag_ipc::proto;
 
 use std::sync::Arc;
 

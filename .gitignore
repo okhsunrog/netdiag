@@ -1,4 +1,5 @@
 # Rust
+/target/
 /daemon/target/
 **/*.rs.bk
 
@@ -33,3 +34,6 @@
 
 # OS
 .DS_Store
+
+# Slint frontend: the daemon copy the APK bundles is a build artefact
+/slint-app/runtime-libs/

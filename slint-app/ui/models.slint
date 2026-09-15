@@ -1,0 +1,126 @@
+import { Status } from "theme.slint";
+
+// The data the UI renders.
+//
+// These are flat and pre-formatted on purpose. The Rust side already has the
+// full protobuf messages; pushing rendering decisions (how an address is
+// written, which status a check maps to) into .slint would mean reimplementing
+// them here in a language with no tests. So Rust formats, Slint arranges.
+//
+// Struct field defaults are a 1.18 feature and are used here so a partially
+// built row is still renderable rather than showing empty strings.
+
+export struct ChipData {
+    text: string,
+    status: Status,
+}
+
+export struct Field {
+    key: string,
+    value: string,
+    status: Status,
+    mono: bool,
+}
+
+export struct CheckRow {
+    key: string,
+    title: string,
+    detail: string,
+    status: Status,
+    duration: string,
+    evidence: [Field],
+    expanded: bool,
+}
+
+export struct FindingRow {
+    key: string,
+    title: string,
+    severity: string,
+    status: Status,
+    confidence: int,
+    paragraphs: [string],
+    actions: [string],
+    based-on: string,
+}
+
+export struct InterfaceRow {
+    name: string,
+    subtitle: string,
+    addresses: string,
+    chips: [ChipData],
+    fields: [Field],
+    expanded: bool,
+}
+
+export struct RouteTableRow {
+    title: string,
+    subtitle: string,
+    lines: [string],
+}
+
+export struct AppRow {
+    label: string,
+    package: string,
+    uid: int,
+}
+
+export struct SocketRow {
+    state: string,
+    status: Status,
+    tuple: string,
+    meta: string,
+}
+
+export struct EventRow {
+    time: string,
+    source: string,
+    status: Status,
+    summary: string,
+}
+
+export struct OverviewData {
+    connected: bool,
+    // Framework side.
+    transport: string,
+    interface-name: string,
+    net-id: string,
+    dns: string,
+    mtu: string,
+    framework-chips: [ChipData],
+    other-networks: [string],
+    // Kernel side.
+    default-routes: [string],
+    sockets-line: string,
+    clat-line: string,
+    // Collection.
+    kernel-release: string,
+    collection: string,
+    warnings: [string],
+}
+
+export struct AppDetailData {
+    present: bool,
+    label: string,
+    package: string,
+    uid: int,
+    summary: string,
+    chips: [ChipData],
+    framework: [Field],
+    rules: [string],
+    routing: [Field],
+    vpn-present: bool,
+    vpn-title: string,
+    vpn-chip: ChipData,
+    vpn: [Field],
+    sockets: [SocketRow],
+    socket-summary: string,
+    firewall: string,
+}
+
+export struct DiagnosisData {
+    running: bool,
+    summary: string,
+    counts: [ChipData],
+    checks: [CheckRow],
+    findings: [FindingRow],
+}

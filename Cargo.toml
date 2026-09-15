@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/netdiag-ipc",
+    "daemon",
+    "slint-app",
+]
+
+# Pinned centrally so the daemon and both frontends cannot drift onto different
+# versions of the protocol's own dependencies.
+[workspace.dependencies]
+anyhow = "1.0.104"
+bytes = "1.12.1"
+libc = "0.2.189"
+prost = "0.14.4"
+prost-build = "0.14.4"
+tokio = "1.53.1"
+tracing = "0.1.44"
+tracing-subscriber = "0.3.23"
+netdiag-ipc = { path = "crates/netdiag-ipc" }
+
+[profile.release]
+# Both the daemon and the Slint app ship inside an APK, so size is worth
+# optimising for.
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true
+# Deliberately not `panic = "abort"`: a panic in one collector should fail that
+# one request, not take down a daemon the user may have several streams open
+# against.
+panic = "unwind"

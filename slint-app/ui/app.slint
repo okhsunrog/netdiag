@@ -1,0 +1,702 @@
+import { ScrollView, ListView, Button, LineEdit } from "std-widgets.slint";
+import { Palette, Style, Status, Chip, MonoText, KeyValue, Card } from "theme.slint";
+import {
+    ChipData, Field, CheckRow, FindingRow, InterfaceRow, RouteTableRow,
+    AppRow, SocketRow, EventRow, OverviewData, AppDetailData, DiagnosisData,
+} from "models.slint";
+
+// A wrapping row of chips.
+//
+// This is what FlexboxLayout is for: a variable number of variable-width
+// badges that must reflow onto the next line on a narrow phone. Doing it with
+// HorizontalLayout would either clip on small screens or force a fixed chip
+// count. Everything else in this UI stays on Horizontal/VerticalLayout, which
+// the docs note are simpler and faster for a single line.
+component ChipFlow inherits FlexboxLayout {
+    in property <[ChipData]> chips;
+
+    flex-direction: row;
+    flex-wrap: wrap;
+    alignment: start;
+    cross-axis-alignment: center;
+    spacing-horizontal: 6px;
+    spacing-vertical: 6px;
+
+    for chip in root.chips: Chip {
+        text: chip.text;
+        status: chip.status;
+    }
+}
+
+component TabButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    callback clicked <=> touch.clicked;
+
+    background: root.selected ? Palette.accent.with-alpha(0.18) : transparent;
+    border-radius: 8px;
+    horizontal-stretch: 1;
+
+    touch := TouchArea { }
+
+    VerticalLayout {
+        padding: 6px;
+        alignment: center;
+        Text {
+            text: root.label;
+            color: root.selected ? Palette.accent : Palette.on-surface-dim;
+            font-size: 11px;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+// A row that expands to show detail when tapped.
+component Expander inherits Rectangle {
+    in property <bool> expanded;
+    callback toggled();
+
+    background: transparent;
+    touch := TouchArea {
+        clicked => { root.toggled(); }
+    }
+    VerticalLayout {
+        spacing: 4px;
+        @children
+    }
+}
+
+component FieldList inherits VerticalLayout {
+    in property <[Field]> fields;
+    spacing: 3px;
+
+    for field in root.fields: KeyValue {
+        key: field.key;
+        value: field.value;
+        value-color: field.status == Status.skip ? Palette.on-surface : Style.color-for(field.status);
+        mono: field.mono;
+    }
+}
+
+// ---- Screens ---------------------------------------------------------------
+
+component OverviewScreen inherits ScrollView {
+    in property <OverviewData> data;
+    in property <[InterfaceRow]> interfaces;
+    callback refresh();
+    callback toggle-interface(int);
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 12px;
+
+        HorizontalLayout {
+            spacing: 8px;
+            Text {
+                text: "Current state";
+                color: Palette.on-surface;
+                font-size: 16px;
+                font-weight: 700;
+                vertical-alignment: center;
+                horizontal-stretch: 1;
+            }
+            Button {
+                text: "Refresh";
+                clicked => { root.refresh(); }
+            }
+        }
+
+        Card {
+            title: "Android framework";
+            subtitle: "ConnectivityManager";
+
+            KeyValue { key: "Transport"; value: root.data.transport; mono: false; }
+            KeyValue { key: "Interface"; value: root.data.interface-name; }
+            KeyValue { key: "Network ID"; value: root.data.net-id; }
+
+            ChipFlow { chips: root.data.framework-chips; }
+
+            if root.data.dns != "": KeyValue { key: "DNS"; value: root.data.dns; }
+            if root.data.mtu != "": KeyValue { key: "MTU"; value: root.data.mtu; }
+
+            for line in root.data.other-networks: MonoText {
+                text: line;
+                color: Palette.on-surface-dim;
+            }
+        }
+
+        Card {
+            title: "Linux kernel";
+            subtitle: "netlink";
+
+            for line in root.data.default-routes: MonoText { text: line; }
+            if root.data.clat-line != "": KeyValue {
+                key: "464XLAT";
+                value: root.data.clat-line;
+                mono: false;
+            }
+            if root.data.sockets-line != "": KeyValue {
+                key: "Sockets";
+                value: root.data.sockets-line;
+            }
+        }
+
+        Text {
+            text: "Interfaces";
+            color: Palette.on-surface;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        for iface[index] in root.interfaces: Card {
+            title: iface.name;
+            subtitle: iface.subtitle;
+
+            ChipFlow { chips: iface.chips; }
+
+            Expander {
+                expanded: iface.expanded;
+                toggled => { root.toggle-interface(index); }
+
+                MonoText {
+                    text: iface.addresses;
+                    color: Palette.on-surface-dim;
+                    wrap: word-wrap;
+                    overflow: clip;
+                }
+                if iface.expanded: FieldList { fields: iface.fields; }
+            }
+        }
+
+        Card {
+            title: "Collection";
+            subtitle: root.data.collection;
+            KeyValue { key: "kernel"; value: root.data.kernel-release; }
+            for warning in root.data.warnings: KeyValue {
+                key: "warning";
+                value: warning;
+                mono: false;
+                value-color: Palette.warn;
+            }
+        }
+    }
+}
+
+component DiagnoseScreen inherits ScrollView {
+    in property <DiagnosisData> data;
+    callback diagnose();
+    callback toggle-check(int);
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 12px;
+
+        Button {
+            text: root.data.running ? "Diagnosing…" : "Diagnose connection";
+            enabled: !root.data.running;
+            clicked => { root.diagnose(); }
+        }
+
+        if root.data.summary != "": Card {
+            title: root.data.summary;
+            ChipFlow { chips: root.data.counts; }
+        }
+
+        if root.data.findings.length > 0: Text {
+            text: "Interpretation";
+            color: Palette.on-surface;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        for finding in root.data.findings: Card {
+            title: finding.title;
+            subtitle: finding.severity + " · " + finding.confidence + "% confidence";
+
+            ChipFlow {
+                chips: [{ text: finding.severity, status: finding.status }];
+            }
+
+            for paragraph in finding.paragraphs: Text {
+                text: paragraph;
+                color: Palette.on-surface;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+
+            if finding.actions.length > 0: Text {
+                text: "What to try";
+                color: Palette.on-surface;
+                font-size: 13px;
+                font-weight: 700;
+            }
+            for action in finding.actions: HorizontalLayout {
+                spacing: 4px;
+                Text { text: "•"; color: Palette.on-surface-dim; }
+                Text {
+                    text: action;
+                    color: Palette.on-surface;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                    horizontal-stretch: 1;
+                }
+            }
+
+            MonoText {
+                text: finding.based-on;
+                color: Palette.on-surface-dim;
+                wrap: word-wrap;
+                overflow: clip;
+            }
+        }
+
+        if root.data.checks.length > 0: Text {
+            text: "Checks";
+            color: Palette.on-surface;
+            font-size: 14px;
+            font-weight: 700;
+        }
+
+        for check[index] in root.data.checks: Card {
+            Expander {
+                expanded: check.expanded;
+                toggled => { root.toggle-check(index); }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+
+                    Chip {
+                        text: check.status == Status.pass ? "PASS"
+                            : check.status == Status.fail ? "FAIL"
+                            : check.status == Status.warn ? "WARN"
+                            : check.status == Status.info ? "INFO" : "SKIP";
+                        status: check.status;
+                        // Keep the badge at the top of a multi-line row rather
+                        // than letting the container centre it.
+                        cross-axis-self-alignment: start;
+                    }
+
+                    VerticalLayout {
+                        spacing: 2px;
+                        horizontal-stretch: 1;
+                        Text {
+                            text: check.title;
+                            color: Palette.on-surface;
+                            font-size: 13px;
+                            font-weight: 600;
+                            wrap: word-wrap;
+                        }
+                        Text {
+                            text: check.detail;
+                            color: Palette.on-surface-dim;
+                            font-size: 12px;
+                            wrap: word-wrap;
+                        }
+                    }
+                }
+
+                if check.expanded: VerticalLayout {
+                    spacing: 3px;
+                    padding-left: 8px;
+                    MonoText { text: check.key + "  " + check.duration; color: Palette.on-surface-dim; }
+                    FieldList { fields: check.evidence; }
+                }
+            }
+        }
+    }
+}
+
+component RoutingScreen inherits ScrollView {
+    in property <[string]> rules;
+    in property <[RouteTableRow]> tables;
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 12px;
+
+        Card {
+            title: "Policy rules";
+            subtitle: root.rules.length + " matching this view";
+            for rule in root.rules: MonoText {
+                text: rule;
+                wrap: word-wrap;
+                overflow: clip;
+            }
+        }
+
+        for table in root.tables: Card {
+            title: table.title;
+            subtitle: table.subtitle;
+            for line in table.lines: MonoText {
+                text: line;
+                wrap: word-wrap;
+                overflow: clip;
+            }
+        }
+    }
+}
+
+component AppsScreen inherits VerticalLayout {
+    in property <[AppRow]> apps;
+    in property <AppDetailData> detail;
+    in-out property <string> filter;
+    callback select-app(int);
+    callback clear-app();
+
+    if !root.detail.present: VerticalLayout {
+        padding: 12px;
+        spacing: 8px;
+
+        LineEdit {
+            placeholder-text: "Filter by name, package or uid";
+            text <=> root.filter;
+        }
+
+        ListView {
+            for app[index] in root.apps: Rectangle {
+                background: touch.has-hover ? Palette.surface-alt : transparent;
+                touch := TouchArea {
+                    clicked => { root.select-app(index); }
+                }
+                VerticalLayout {
+                    padding: 8px;
+                    spacing: 2px;
+                    Text {
+                        text: app.label;
+                        color: Palette.on-surface;
+                        font-size: 14px;
+                        overflow: elide;
+                    }
+                    MonoText {
+                        text: app.package + "  uid " + app.uid;
+                        color: Palette.on-surface-dim;
+                    }
+                }
+            }
+        }
+    }
+
+    if root.detail.present: ScrollView {
+        VerticalLayout {
+            padding: 12px;
+            spacing: 12px;
+
+            HorizontalLayout {
+                spacing: 8px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    Text {
+                        text: root.detail.label;
+                        color: Palette.on-surface;
+                        font-size: 16px;
+                        font-weight: 700;
+                        overflow: elide;
+                    }
+                    MonoText {
+                        text: root.detail.package + "  uid " + root.detail.uid;
+                        color: Palette.on-surface-dim;
+                    }
+                }
+                Button {
+                    text: "Back";
+                    clicked => { root.clear-app(); }
+                }
+            }
+
+            Card {
+                title: "Summary";
+                Text {
+                    text: root.detail.summary;
+                    color: Palette.on-surface;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+                ChipFlow { chips: root.detail.chips; }
+            }
+
+            if root.detail.framework.length > 0: Card {
+                title: "Android network";
+                subtitle: "what the framework says";
+                FieldList { fields: root.detail.framework; }
+            }
+
+            Card {
+                title: "Routing";
+                subtitle: "what the kernel actually does for this uid";
+                for rule in root.detail.rules: MonoText {
+                    text: rule;
+                    wrap: word-wrap;
+                    overflow: clip;
+                }
+                FieldList { fields: root.detail.routing; }
+            }
+
+            if root.detail.vpn-present: Card {
+                title: root.detail.vpn-title;
+                ChipFlow { chips: [root.detail.vpn-chip]; }
+                FieldList { fields: root.detail.vpn; }
+            }
+
+            Card {
+                title: "Sockets";
+                subtitle: root.detail.socket-summary;
+                for socket in root.detail.sockets: HorizontalLayout {
+                    spacing: 8px;
+                    Chip {
+                        text: socket.state;
+                        status: socket.status;
+                        cross-axis-self-alignment: start;
+                    }
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 1px;
+                        MonoText { text: socket.tuple; }
+                        MonoText { text: socket.meta; color: Palette.on-surface-dim; }
+                    }
+                }
+            }
+
+            if root.detail.firewall != "": Card {
+                title: "Firewall";
+                Text {
+                    text: root.detail.firewall;
+                    color: Palette.on-surface;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+    }
+}
+
+component TimelineScreen inherits VerticalLayout {
+    in property <[EventRow]> events;
+    callback clear-events();
+
+    padding: 12px;
+    spacing: 8px;
+
+    HorizontalLayout {
+        spacing: 8px;
+        Text {
+            text: root.events.length + " events";
+            color: Palette.on-surface-dim;
+            font-size: 12px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+        }
+        Button {
+            text: "Clear";
+            clicked => { root.clear-events(); }
+        }
+    }
+
+    // ListView virtualizes; a `for` inside a ScrollView would build every row.
+    ListView {
+        for event in root.events: HorizontalLayout {
+            padding-top: 3px;
+            padding-bottom: 3px;
+            spacing: 8px;
+
+            MonoText {
+                text: event.time;
+                color: Palette.on-surface-dim;
+                width: 96px;
+            }
+            Chip {
+                text: event.source;
+                status: event.status;
+                cross-axis-self-alignment: start;
+            }
+            Text {
+                text: event.summary;
+                color: Palette.on-surface;
+                font-family: Palette.mono;
+                font-size: Palette.mono-size;
+                horizontal-stretch: 1;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+// ---- Window ----------------------------------------------------------------
+
+export component App inherits Window {
+    title: "Network Inspector";
+    background: Palette.background;
+    default-font-size: 14px;
+
+    // A phone-shaped default. Android ignores it (the window is the screen),
+    // but the desktop harness needs a size or the window collapses to its
+    // minimum and every screen looks broken.
+    preferred-width: 420px;
+    preferred-height: 900px;
+    min-width: 320px;
+    min-height: 480px;
+
+    in-out property <int> tab: 0;
+    in property <bool> connected: false;
+    in property <bool> connecting: false;
+    in property <string> connect-error: "";
+    in property <string> status-line: "";
+
+    in property <OverviewData> overview;
+    in property <[InterfaceRow]> interfaces;
+    in property <DiagnosisData> diagnosis;
+    in property <[string]> rules;
+    in property <[RouteTableRow]> route-tables;
+    in property <[AppRow]> apps;
+    in property <AppDetailData> app-detail;
+    in property <[EventRow]> events;
+    in-out property <string> app-filter;
+
+    callback connect();
+    callback disconnect();
+    callback refresh();
+    callback diagnose();
+    callback toggle-check(int);
+    callback toggle-interface(int);
+    callback select-app(int);
+    callback clear-app();
+    callback clear-events();
+    callback filter-changed(string);
+
+    changed app-filter => { root.filter-changed(self.app-filter); }
+
+    VerticalLayout {
+        // Top bar.
+        Rectangle {
+            background: Palette.surface;
+            height: 52px;
+            HorizontalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                spacing: 8px;
+                Text {
+                    text: "Network Inspector";
+                    color: Palette.on-surface;
+                    font-size: 17px;
+                    font-weight: 700;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                Button {
+                    text: root.connected ? "Disconnect" : root.connecting ? "…" : "Connect";
+                    enabled: !root.connecting;
+                    clicked => {
+                        if (root.connected) { root.disconnect(); } else { root.connect(); }
+                    }
+                }
+            }
+        }
+
+        if !root.connected: VerticalLayout {
+            padding: 24px;
+            spacing: 12px;
+            alignment: center;
+
+            Text {
+                text: "Not connected to the daemon";
+                color: Palette.on-surface;
+                font-size: 17px;
+                font-weight: 700;
+                horizontal-alignment: center;
+            }
+            Text {
+                text: "This app reads kernel networking state through a small root daemon. "
+                    + "Connecting starts it through su and authorizes only this app's uid.";
+                color: Palette.on-surface-dim;
+                font-size: 13px;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            if root.status-line != "": Text {
+                text: root.status-line;
+                color: Palette.on-surface-dim;
+                font-size: 12px;
+                font-family: Palette.mono;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+            }
+            if root.connect-error != "": Card {
+                title: "Could not connect";
+                Text {
+                    text: root.connect-error;
+                    color: Palette.fail;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        if root.connected: Rectangle {
+            vertical-stretch: 1;
+            if root.tab == 0: OverviewScreen {
+                data: root.overview;
+                interfaces: root.interfaces;
+                refresh => { root.refresh(); }
+                toggle-interface(index) => { root.toggle-interface(index); }
+            }
+            if root.tab == 1: DiagnoseScreen {
+                data: root.diagnosis;
+                diagnose => { root.diagnose(); }
+                toggle-check(index) => { root.toggle-check(index); }
+            }
+            if root.tab == 2: RoutingScreen {
+                rules: root.rules;
+                tables: root.route-tables;
+            }
+            if root.tab == 3: AppsScreen {
+                apps: root.apps;
+                detail: root.app-detail;
+                filter <=> root.app-filter;
+                select-app(index) => { root.select-app(index); }
+                clear-app => { root.clear-app(); }
+            }
+            if root.tab == 4: TimelineScreen {
+                events: root.events;
+                clear-events => { root.clear-events(); }
+            }
+        }
+
+        // Bottom navigation.
+        if root.connected: Rectangle {
+            background: Palette.surface;
+            height: 56px;
+            HorizontalLayout {
+                padding: 6px;
+                spacing: 4px;
+                TabButton {
+                    label: "Overview";
+                    selected: root.tab == 0;
+                    clicked => { root.tab = 0; }
+                }
+                TabButton {
+                    label: "Diagnose";
+                    selected: root.tab == 1;
+                    clicked => { root.tab = 1; }
+                }
+                TabButton {
+                    label: "Routing";
+                    selected: root.tab == 2;
+                    clicked => { root.tab = 2; }
+                }
+                TabButton {
+                    label: "Apps";
+                    selected: root.tab == 3;
+                    clicked => { root.tab = 3; }
+                }
+                TabButton {
+                    label: "Timeline";
+                    selected: root.tab == 4;
+                    clicked => { root.tab = 4; }
+                }
+            }
+        }
+    }
+}

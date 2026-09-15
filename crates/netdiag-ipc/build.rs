@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 fn main() {
+    // crates/netdiag-ipc -> repository root -> proto
     let proto_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
         .join("..")
         .join("proto");
 
