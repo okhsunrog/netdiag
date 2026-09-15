@@ -15,7 +15,9 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DAEMON_DIR="$REPO_ROOT/daemon"
-JNI_LIBS_DIR="$REPO_ROOT/android/app/src/main/jniLibs"
+# cargo-rapk copies this tree into the APK's lib/<abi>/ verbatim; the directory
+# is named in slint-app/Cargo.toml as `runtime_libs`.
+JNI_LIBS_DIR="$REPO_ROOT/slint-app/runtime-libs"
 
 ABI="${ABI:-arm64-v8a}"
 PROFILE="${PROFILE:-release}"
@@ -88,4 +90,4 @@ chmod 755 "$DEST"
 SIZE="$(du -h --apparent-size "$DEST" | cut -f1)"
 echo "installed $DEST ($SIZE)"
 echo
-echo "next: cd android && ./gradlew :app:assembleDebug"
+echo "next: cd slint-app && cargo rapk build --lib"

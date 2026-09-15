@@ -56,7 +56,7 @@ proto/                    the schema, unchanged
 crates/netdiag-ipc/       prost types + framing + client   <- shared
 daemon/                   uses netdiag-ipc
 slint-app/                uses netdiag-ipc
-android/                  regenerates from proto/ via Gradle
+android/                  regenerated from proto/ via Gradle (since removed)
 ```
 
 The Compose app has to regenerate the schema through the protobuf Gradle plugin
@@ -491,3 +491,50 @@ crate: it deleted 435 lines of hand-written Kotlin protocol code and left one
 implementation of the wire format instead of two. That was worth doing
 regardless of which UI wins — and it only happened because something else
 needed to speak the protocol.
+
+## Afterword: the frontend that lost the argument was kept
+
+This document recommends Compose. The project went the other way, and the
+Compose frontend has since been deleted. Both of those are true, and the
+document is left as written rather than quietly revised, because the reason is
+worth recording.
+
+The analysis above optimises for one thing: the best tool for the least effort.
+On that measure the conclusion still holds — the framework half costs about 1.8×
+in Rust and loses compile-time checking, and nothing found since changes that.
+
+But this is a personal instrument, not a product with an audience, and its owner
+had already written Compose apps. Under *that* objective the same facts read
+differently:
+
+| | as a product | as this project |
+|---|---|---|
+| framework layer costs 1.8× | overhead | the part worth learning |
+| `RegisterNatives` forced by `NativeActivity`'s `dlopen` | a wart | a fact about Android worth knowing |
+| Slint tracked on `master`, `cargo-rapk` at 0.21, JDK pinned ≤ 21 | unacceptable risk | acceptable, and more interesting |
+
+A cost is only a cost relative to what you are buying. This document measured
+effort because that is what a product optimises; the project was optimising for
+what the effort teaches. Both columns are honest; they are answers to different
+questions, and the document never asked which question applied.
+
+What the removal actually took was small, because the shared `netdiag-ipc` crate
+had already absorbed the protocol: two screens, no new RPCs, no protocol work.
+The sockets screen reads the snapshot the overview already fetches, and capture
+reuses the streaming and cancellation that `Diagnose` and `WatchNetwork` use.
+
+Two things found while closing the gap are worth keeping:
+
+- **The "apps only" socket filter was hard-coded to Android's uid floor.** On a
+  Linux desktop every uid is below 10000, so the desktop harness rendered an
+  empty list with "119 hidden by filters" underneath. The floor now comes from
+  the platform — 10000 on Android, 1000 on Linux — which is the same concept
+  drawn where each system draws it.
+- **"The interface with a default route" is the wrong default on Android.**
+  Every network has its own table and its own default route, and the first one
+  found on a real phone was `dummy0` in table 1002. The framework's active
+  network is the right question to ask.
+
+The wrapping tab bar is the second place `FlexboxLayout` earned its keep: seven
+tabs fit one row on a Pixel and not at the 320px this window claims as its
+minimum, and one piece of markup covers both.

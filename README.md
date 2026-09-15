@@ -9,7 +9,7 @@ tries to explain *why* connectivity is broken — including the cases where
 Android insists everything is `VALIDATED` while packets are going nowhere.
 
 ```text
-Jetpack Compose UI
+Slint UI, in Rust
         |
         | protobuf over a Unix domain socket
         |
@@ -121,27 +121,37 @@ Disagreement  the framework says this app is inside the VPN, but the kernel
 ## Repository layout
 
 ```text
-proto/              the API. Single source of truth for every frontend.
+proto/              the API. Single source of truth for both sides.
 crates/netdiag-ipc/ generated Rust types, framing and client, shared by the
-                    daemon and the Slint app.
+                    daemon and the app.
 daemon/             the Rust root daemon (netdiagd).
-android/            the Compose app (the primary frontend).
-slint-app/          a second frontend in Slint; see docs/slint-experiment.md.
+slint-app/          the app: a Slint UI in Rust, plus two small Java classes.
 scripts/            build-daemon.sh — cross-compiles the daemon into the APK.
 ```
 
-There are two frontends because the second one was an experiment in writing the
-UI in Rust. The Compose app is the one to use; [docs/slint-experiment.md](docs/slint-experiment.md)
-records what the Slint version cost and bought, including the parts that came
-out worse.
+The app was a Jetpack Compose one first, and the Slint version began as an
+experiment in writing the UI in Rust. The Compose frontend has since been
+removed: maintaining two of them was not worth it, and the Rust one is the more
+interesting thing to keep working on.
+
+[docs/slint-experiment.md](docs/slint-experiment.md) is the record of that
+comparison, written while Compose was still the recommended frontend. It is
+kept as written rather than revised: it argues against the choice that was
+eventually made, and says why.
 
 ## The API is the contract
 
 Everything crossing the process boundary is defined once, in
-`proto/netdiag/v1/*.proto`. The Rust side generates from it with `prost` at
-build time; the Android side generates from **the same directory** with the
-protobuf Gradle plugin. Neither side hand-writes a struct that mirrors the
-other, and there is no copy of the schema to drift.
+`proto/netdiag/v1/*.proto`, and generated with `prost` at build time into
+`crates/netdiag-ipc`, which the daemon and the app both link. Neither side
+hand-writes a struct that mirrors the other, and there is no copy of the schema
+to drift.
+
+That crate is what the Slint experiment paid for: while the frontend was Kotlin
+it carried its own 435-line implementation of the same framing, correlation and
+stream handling, because a Kotlin app cannot link a Rust crate. Needing a second
+Rust consumer is what turned the protocol into a shared library instead of two
+implementations of one document.
 
 `buf` enforces this in CI: `buf lint` for style, and `buf breaking` against the
 `main` branch so a wire-incompatible change fails the build rather than
@@ -187,17 +197,30 @@ brings an interface up, or flushes a table.
 ## Building
 
 Requirements: a Rust toolchain with the `aarch64-linux-android` target,
-`cargo-ndk`, the Android NDK, `protoc`, and a JDK.
+`cargo-ndk`, `cargo-rapk`, the Android NDK, `protoc`, and a JDK between 17 and
+21 — Slint's Android backend compiles its own Java helper with `-source 8`,
+which newer JDKs reject.
 
 ```sh
-cargo install cargo-ndk
+cargo install cargo-ndk cargo-rapk
 rustup target add aarch64-linux-android
 export ANDROID_NDK_HOME=/path/to/ndk
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
 
 ./scripts/build-daemon.sh          # cross-compile the daemon into the APK tree
-cd android && ./gradlew :app:assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+cd slint-app && cargo rapk build --lib
+adb install -r target/debug/apk/netdiag-slint.apk
 ```
+
+`cargo-rapk` rather than `cargo-apk`, because the app needs two Java classes in
+the APK — `ConnectivityManager.NetworkCallback` has to be subclassed, and
+enumerating packages is four lines of Java against several hundred JNI calls —
+and `cargo-apk` cannot put a class in an APK. It also signs debug builds, which
+`cargo-apk` will not do without a configured keystore.
+
+If your `~/.cargo/config.toml` sets `build-dir`, add `CARGO_BUILD_BUILD_DIR=target`:
+`cargo-rapk` looks for intermediates under `target/` unconditionally and
+otherwise fails with a bare `No such file or directory`.
 
 The daemon ships inside the APK as `libnetdiagd.so`. That name is not cosmetic:
 the package installer extracts files from `lib/<abi>/` to a directory that
@@ -219,18 +242,31 @@ adb shell 'su -c "/data/local/tmp/netdiagd --self-test"'
 ### Tests
 
 ```sh
-cargo test --workspace           # 138 unit tests, no device needed
+cargo test --workspace           # 128 unit tests, no device needed
 cd proto && buf lint && buf breaking --against '../.git#branch=main,subdir=proto'
 ```
 
-The Slint frontend is a separate cargo workspace (it tracks Slint's master
-branch, which should not be in the daemon's dependency graph). It also runs on
-the desktop against a daemon on the development machine, which is the quickest
-way to look at the UI:
+The app is a separate cargo workspace, because it tracks Slint's master branch
+and that should not sit in the daemon's dependency graph. `cargo test` there
+covers the formatting, the socket filters, and the agreement between the Java
+shim's constants and the Rust table that maps them.
+
+The same UI runs on the desktop against a daemon on the development machine,
+which is the quickest way to look at a screen — and, unlike the Compose build,
+means the UI can be changed without an APK and an `adb install`:
 
 ```sh
 sudo ./target/debug/netdiagd --socket @netdiag --allow-uid "$(id -u)"
 cd slint-app && cargo run --bin netdiag-slint-desktop -- --connect
+```
+
+It can also drive itself headlessly and render the result to a PNG, which is how
+the screens are checked without a phone:
+
+```sh
+cargo run --bin netdiag-slint-desktop -- --connect --tab 4 --snapshot sockets.png
+cargo run --bin netdiag-slint-desktop -- --connect --tab 5 \
+    --capture wlan0 --save-capture --settle-ms 6000 --snapshot capture.png
 ```
 
 The daemon's tests are pure functions over parsing, filtering and the rule
