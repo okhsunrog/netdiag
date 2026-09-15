@@ -544,3 +544,81 @@ Two things found while closing the gap are worth keeping:
 The wrapping tab bar is the second place `FlexboxLayout` earned its keep: seven
 tabs fit one row on a Pixel and not at the 320px this window claims as its
 minimum, and one piece of markup covers both.
+
+## The Android boundary: a facade, and the generator that lost
+
+The framework half was this document's whole argument against Rust. Two ways to
+narrow the gap were built on branches and compared: a coarse-grained Java facade
+(`android-facade`, merged) and generated bindings from `jbindgen`
+(`android-jbindgen`, kept as the evidence).
+
+| | hand-written | facade | jbindgen |
+|---|---|---|---|
+| `bind_java_type!` blocks written by hand | 10 | **5** | **4** |
+| SDK constants copied in as integers | 11 | **0** | **0** |
+| `platform/android.rs` | 669 | **380** | 616 |
+| Java | 264 | 449 | 264 |
+| Generated code | 0 | 0 | 2783 |
+| JNI calls per refresh, 5 networks | ~140 | **1** | ~140 |
+
+### What both fixed
+
+The eleven `NET_CAPABILITY_*` integers. That was the honest embarrassment of
+the original: a comment asserting the platform ABI is stable, next to `16`.
+
+### What only the facade fixed
+
+The call count, and where the SDK's *semantics* live. `@RequiresApi`,
+`@Nullable`, `@RequiresPermission`, `@IntDef` and Android Lint all work inside
+Java and none of them cross into Rust through a binding, generated or not. Since
+the facade puts every SDK call on the Java side, they apply to all of it.
+
+The Java emits capability and transport **names**, never the integers, so
+`javac` resolves `NET_CAPABILITY_VALIDATED` against the real SDK and a renamed
+constant fails the build. Rust agrees with a word, and a test asserts both sides
+know the same set of words.
+
+### What only jbindgen fixed, and it was not what anyone predicted
+
+Deprecation. The SDK's `@Deprecated` survives generation, so `rustc` reports:
+
+```
+warning: use of deprecated method `ConnectivityManager::get_all_networks`
+```
+
+The hand-written binding had said nothing for as long as it existed. The facade
+surfaces the same fact, but only as javac's generic `Note: uses or overrides a
+deprecated API` — naming the method needs `-Xlint:deprecation`, which
+`cargo-rapk` does not pass.
+
+### Two things the generator taught
+
+**Every generated signature was already right.** It compiled first try, no
+corrections. That is the third independent confirmation that mistyped JNI
+signatures — the failure this document feared most — never actually happened
+here.
+
+**Generated constants are not constants.** `NET_CAPABILITY_VALIDATED(env)` is a
+JNI static-field read returning `Result`, not a literal. Eleven per network per
+refresh would have given back most of the benefit, so they have to be resolved
+once and cached. The magic numbers are gone, at the cost of a runtime mechanism
+that did not exist before.
+
+**And it must be generated against minSdk, not the compile SDK.** Against API 34
+the bindings also carry `getEnterpriseIds`, `NET_CAPABILITY_MMTEL` and nine
+other members added after 31. `bind_java_type!` resolves every method and field
+id eagerly on first use of a class, so on an Android 12 device that first use
+fails — over members the app never calls. A test device newer than minSdk never
+shows it. This is not in jbindgen's documentation.
+
+### Why the facade won
+
+Not the call count. Because the residual gap with Kotlin was never signatures —
+it was everything the SDK expresses in annotations, and that stays checkable
+only on the Java side of the boundary. jbindgen transfers the half this project
+had never got wrong, and adds a trap that is invisible in testing.
+
+Neither branch has run on a device. Both compile for `aarch64-linux-android` and
+package; that is all that is claimed. Given how often this experiment's
+device-only findings contradicted its compile-time reasoning, that distinction
+is worth keeping in front of the reader.
