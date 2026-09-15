@@ -62,7 +62,7 @@ of it to keep honest.
 
 ```sh
 sudo netdiagd --socket @netdiag --allow-uid "$(id -u)"
-cargo run -p netdiag-slint --bin netdiag-slint-desktop -- --connect --tab 1
+cd slint-app && cargo run --bin netdiag-slint-desktop -- --connect --tab 1
 ```
 
 The whole interface runs against a daemon on the development machine, with real
