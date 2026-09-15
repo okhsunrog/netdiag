@@ -3,6 +3,7 @@ import { Palette, Style, Status, Chip, MonoText, KeyValue, Card } from "theme.sl
 import {
     ChipData, Field, CheckRow, FindingRow, InterfaceRow, RouteTableRow,
     AppRow, SocketRow, EventRow, OverviewData, AppDetailData, DiagnosisData,
+    SocketsData, CaptureData, PacketRow,
 } from "models.slint";
 
 // A wrapping row of chips.
@@ -35,7 +36,9 @@ component TabButton inherits Rectangle {
 
     background: root.selected ? Palette.accent.with-alpha(0.18) : transparent;
     border-radius: 8px;
-    horizontal-stretch: 1;
+    // Content-sized, not stretched: inside a wrapping FlexboxLayout a stretch
+    // is a flex-grow, and every tab would claim its whole line.
+    horizontal-stretch: 0;
 
     touch := TouchArea { }
 
@@ -48,6 +51,37 @@ component TabButton inherits Rectangle {
             font-size: 11px;
             horizontal-alignment: center;
             overflow: elide;
+        }
+    }
+}
+
+// A chip that is also a switch.
+//
+// Deliberately not a std-widgets CheckBox: these read as "what is this list
+// showing", which is the same thing the status chips elsewhere say, so they
+// should look like chips rather than like a settings form.
+component FilterChip inherits Rectangle {
+    in property <string> label;
+    in property <bool> active;
+    callback toggled <=> touch.clicked;
+
+    background: root.active ? Palette.accent.with-alpha(0.18) : Palette.surface;
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: root.active ? Palette.accent.with-alpha(0.5) : transparent;
+    horizontal-stretch: 0;
+
+    touch := TouchArea { }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        padding-top: 5px;
+        padding-bottom: 5px;
+        Text {
+            text: root.label;
+            color: root.active ? Palette.accent : Palette.on-surface-dim;
+            font-size: 12px;
         }
     }
 }
@@ -523,6 +557,207 @@ component TimelineScreen inherits VerticalLayout {
     }
 }
 
+// Every socket on the device, with the uid that owns it.
+//
+// This is the screen where the daemon's view and the framework's view meet on
+// one line: the kernel supplies the socket and its uid, and the installed-app
+// list supplies the name that makes the uid mean something.
+component SocketsScreen inherits VerticalLayout {
+    in property <SocketsData> data;
+    in property <bool> only-established;
+    in property <bool> only-apps;
+    in property <bool> hide-listen;
+    callback toggle-established();
+    callback toggle-apps();
+    callback toggle-listen();
+    callback refresh();
+
+    padding: 12px;
+    spacing: 8px;
+
+    HorizontalLayout {
+        spacing: 8px;
+        Text {
+            text: root.data.summary;
+            color: Palette.on-surface-dim;
+            font-size: 12px;
+            vertical-alignment: center;
+            horizontal-stretch: 1;
+            wrap: word-wrap;
+        }
+        Button {
+            text: "Refresh";
+            clicked => { root.refresh(); }
+        }
+    }
+
+    // The same wrapping-chips pattern as everywhere else: three labels of
+    // different widths that must reflow rather than clip on a narrow phone.
+    FlexboxLayout {
+        flex-direction: row;
+        flex-wrap: wrap;
+        alignment: start;
+        spacing-horizontal: 6px;
+        spacing-vertical: 6px;
+        FilterChip {
+            label: "Established";
+            active: root.only-established;
+            toggled => { root.toggle-established(); }
+        }
+        FilterChip {
+            label: "Apps only";
+            active: root.only-apps;
+            toggled => { root.toggle-apps(); }
+        }
+        FilterChip {
+            label: "Hide listening";
+            active: root.hide-listen;
+            toggled => { root.toggle-listen(); }
+        }
+    }
+
+    if root.data.hidden != "": Text {
+        text: root.data.hidden;
+        color: Palette.on-surface-dim;
+        font-size: 11px;
+    }
+
+    ListView {
+        for socket in root.data.rows: HorizontalLayout {
+            padding-top: 4px;
+            padding-bottom: 4px;
+            spacing: 8px;
+
+            Chip {
+                text: socket.state;
+                status: socket.status;
+                cross-axis-self-alignment: start;
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 1px;
+                MonoText { text: socket.tuple; }
+                HorizontalLayout {
+                    spacing: 8px;
+                    MonoText {
+                        text: socket.meta;
+                        color: Palette.on-surface-dim;
+                    }
+                    if socket.owner != "": Text {
+                        text: socket.owner;
+                        color: Palette.on-surface-dim;
+                        font-size: 11px;
+                        overflow: elide;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Live packet capture from a real interface.
+component CaptureScreen inherits VerticalLayout {
+    in property <CaptureData> data;
+    in property <[string]> interfaces;
+    in-out property <string> selected-interface;
+    // Not `start`/`stop`: `start` collides with the layout alignment value of
+    // the same name, and the compiler's complaint points at the alignment.
+    callback start-capture(string);
+    callback stop-capture();
+    callback save-capture();
+
+    padding: 12px;
+    spacing: 8px;
+
+    HorizontalLayout {
+        spacing: 8px;
+        if !root.data.running: Button {
+            text: "Start";
+            clicked => { root.start-capture(root.selected-interface); }
+        }
+        if root.data.running: Button {
+            text: "Stop";
+            clicked => { root.stop-capture(); }
+        }
+        Button {
+            text: "Save .pcap";
+            clicked => { root.save-capture(); }
+        }
+    }
+
+    // Which interface to open. A wrapping row again: interface names vary from
+    // "lo" to "rmnet_data12" and there can be a dozen of them.
+    FlexboxLayout {
+        flex-direction: row;
+        flex-wrap: wrap;
+        alignment: start;
+        spacing-horizontal: 6px;
+        spacing-vertical: 6px;
+        for name in root.interfaces: FilterChip {
+            label: name;
+            active: root.selected-interface == name;
+            toggled => { root.selected-interface = name; }
+        }
+    }
+
+    Text {
+        text: root.data.summary;
+        color: Palette.on-surface-dim;
+        font-size: 12px;
+        wrap: word-wrap;
+    }
+
+    if root.data.error != "": Text {
+        text: root.data.error;
+        color: Style.color-for(Status.fail);
+        font-size: 12px;
+        wrap: word-wrap;
+    }
+
+    if root.data.saved-path != "": Text {
+        text: "Saved to " + root.data.saved-path;
+        color: Style.color-for(Status.pass);
+        font-size: 11px;
+        wrap: word-wrap;
+    }
+
+    if root.data.packets.length == 0: Text {
+        text: "Captures from the real interface with AF_PACKET, so it works "
+            + "while a VPN is connected — Android allows only one VpnService, "
+            + "and the VPN app already holds it.";
+        color: Palette.on-surface-dim;
+        font-size: 12px;
+        wrap: word-wrap;
+    }
+
+    ListView {
+        for packet in root.data.packets: HorizontalLayout {
+            padding-top: 3px;
+            padding-bottom: 3px;
+            spacing: 8px;
+
+            MonoText {
+                text: packet.time;
+                color: Palette.on-surface-dim;
+                width: 108px;
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 1px;
+                MonoText {
+                    text: packet.summary;
+                    color: Style.color-for(packet.status);
+                }
+                MonoText {
+                    text: packet.detail;
+                    color: Palette.on-surface-dim;
+                }
+            }
+        }
+    }
+}
+
 // ---- Window ----------------------------------------------------------------
 
 export component App inherits Window {
@@ -554,6 +789,15 @@ export component App inherits Window {
     in property <[EventRow]> events;
     in-out property <string> app-filter;
 
+    in property <SocketsData> sockets;
+    in-out property <bool> only-established;
+    in-out property <bool> only-apps: true;
+    in-out property <bool> hide-listen;
+
+    in property <CaptureData> capture;
+    in property <[string]> capture-interfaces;
+    in-out property <string> capture-interface;
+
     callback connect();
     callback disconnect();
     callback refresh();
@@ -564,6 +808,10 @@ export component App inherits Window {
     callback clear-app();
     callback clear-events();
     callback filter-changed(string);
+    callback sockets-filter-changed();
+    callback start-capture(string);
+    callback stop-capture();
+    callback save-capture();
 
     changed app-filter => { root.filter-changed(self.app-filter); }
 
@@ -666,19 +914,56 @@ export component App inherits Window {
                 select-app(index) => { root.select-app(index); }
                 clear-app => { root.clear-app(); }
             }
-            if root.tab == 4: TimelineScreen {
+            if root.tab == 4: SocketsScreen {
+                data: root.sockets;
+                only-established: root.only-established;
+                only-apps: root.only-apps;
+                hide-listen: root.hide-listen;
+                toggle-established => {
+                    root.only-established = !root.only-established;
+                    root.sockets-filter-changed();
+                }
+                toggle-apps => {
+                    root.only-apps = !root.only-apps;
+                    root.sockets-filter-changed();
+                }
+                toggle-listen => {
+                    root.hide-listen = !root.hide-listen;
+                    root.sockets-filter-changed();
+                }
+                refresh => { root.refresh(); }
+            }
+            if root.tab == 5: CaptureScreen {
+                data: root.capture;
+                interfaces: root.capture-interfaces;
+                selected-interface <=> root.capture-interface;
+                start-capture(name) => { root.start-capture(name); }
+                stop-capture => { root.stop-capture(); }
+                save-capture => { root.save-capture(); }
+            }
+            if root.tab == 6: TimelineScreen {
                 events: root.events;
                 clear-events => { root.clear-events(); }
             }
         }
 
         // Bottom navigation.
+        //
+        // Seven tabs fit one row on a Pixel-sized screen and do not at the
+        // 320px this window declares as its minimum, so the bar wraps instead
+        // of clipping. That is the whole argument for Flexbox here: one piece
+        // of markup that is a single row when there is room and two when there
+        // is not, rather than a layout chosen per form factor.
         if root.connected: Rectangle {
             background: Palette.surface;
-            height: 56px;
-            HorizontalLayout {
+            nav := FlexboxLayout {
+                flex-direction: row;
+                flex-wrap: wrap;
+                alignment: start;
                 padding: 6px;
-                spacing: 4px;
+                spacing-horizontal: 4px;
+                spacing-vertical: 4px;
+
                 TabButton {
                     label: "Overview";
                     selected: root.tab == 0;
@@ -700,9 +985,19 @@ export component App inherits Window {
                     clicked => { root.tab = 3; }
                 }
                 TabButton {
-                    label: "Timeline";
+                    label: "Sockets";
                     selected: root.tab == 4;
                     clicked => { root.tab = 4; }
+                }
+                TabButton {
+                    label: "Capture";
+                    selected: root.tab == 5;
+                    clicked => { root.tab = 5; }
+                }
+                TabButton {
+                    label: "Timeline";
+                    selected: root.tab == 6;
+                    clicked => { root.tab = 6; }
                 }
             }
         }

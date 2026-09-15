@@ -515,24 +515,13 @@ pub fn app_detail(state: &proto::AppNetworkState) -> ui::AppDetailData {
         }
     }
 
+    // The owner is already the heading of this screen, so the rows leave it
+    // blank rather than repeating the package name on every line.
     let sockets: Vec<ui::SocketRow> = state
         .sockets
         .iter()
         .take(40)
-        .map(|socket| {
-            let tcp_state =
-                proto::TcpState::try_from(socket.state).unwrap_or(proto::TcpState::Unspecified);
-            let mut meta = format!("uid {}", socket.uid);
-            if socket.has_mark && socket.net_id != 0 {
-                meta.push_str(&format!("  netId {}", socket.net_id));
-            }
-            ui::SocketRow {
-                state: shared(tcp_state_label(tcp_state)),
-                status: socket_status(tcp_state),
-                tuple: shared(socket_tuple(socket)),
-                meta: shared(meta),
-            }
-        })
+        .map(|socket| socket_row(socket, String::new()))
         .collect();
 
     ui::AppDetailData {
@@ -669,5 +658,208 @@ pub fn empty_overview() -> ui::OverviewData {
         kernel_release: shared(""),
         collection: shared(""),
         warnings: model(Vec::<slint::SharedString>::new()),
+    }
+}
+
+// ---- Sockets ----------------------------------------------------------------
+
+/// Which sockets the screen shows.
+///
+/// `app_uid_floor` comes from the platform: on Android everything below 10000
+/// is the system, on a Linux desktop everything below 1000 is. Hard-coding
+/// Android's value made the desktop harness hide every socket it had.
+#[derive(Clone, Copy)]
+pub struct SocketFilters {
+    pub only_established: bool,
+    pub only_apps: bool,
+    pub hide_listen: bool,
+    pub app_uid_floor: u32,
+}
+
+impl SocketFilters {
+    fn keeps(&self, socket: &proto::Socket) -> bool {
+        let state = proto::TcpState::try_from(socket.state).unwrap_or(proto::TcpState::Unspecified);
+        if self.only_established && state != proto::TcpState::Established {
+            return false;
+        }
+        if self.only_apps && socket.uid < self.app_uid_floor {
+            return false;
+        }
+        if self.hide_listen && state == proto::TcpState::Listen {
+            return false;
+        }
+        true
+    }
+}
+
+/// Every socket on the device, grouped so the uid that owns it is what the eye
+/// lands on first.
+///
+/// `owner` is resolved from the installed-app list rather than from the daemon:
+/// the kernel knows the uid, and only the framework knows the name.
+pub fn sockets(
+    snapshot: &proto::Snapshot,
+    filters: SocketFilters,
+    owner_for_uid: &dyn Fn(u32) -> String,
+) -> ui::SocketsData {
+    let mut kept: Vec<&proto::Socket> = snapshot
+        .sockets
+        .iter()
+        .filter(|socket| filters.keeps(socket))
+        .collect();
+
+    // By uid, then by state, so every socket of one app sits together.
+    kept.sort_by(|a, b| a.uid.cmp(&b.uid).then_with(|| a.state.cmp(&b.state)));
+
+    let total = snapshot.sockets.len();
+    let shown = kept.len();
+    let rows: Vec<ui::SocketRow> = kept
+        .into_iter()
+        .take(400)
+        .map(|socket| socket_row(socket, owner_for_uid(socket.uid)))
+        .collect();
+
+    let summary = match snapshot.socket_summary.as_ref() {
+        Some(s) => format!(
+            "{} sockets · {} established · {} listening · {} time-wait",
+            s.total, s.established, s.listen, s.time_wait
+        ),
+        None => format!("{total} sockets"),
+    };
+
+    let hidden = if shown == total {
+        String::new()
+    } else {
+        format!("{} hidden by filters", total - shown)
+    };
+
+    ui::SocketsData {
+        summary: shared(summary),
+        hidden: shared(hidden),
+        rows: model(rows),
+    }
+}
+
+/// One socket row, shared by the sockets screen and the per-app detail.
+pub fn socket_row(socket: &proto::Socket, owner: String) -> ui::SocketRow {
+    let state = proto::TcpState::try_from(socket.state).unwrap_or(proto::TcpState::Unspecified);
+
+    let mut meta = format!("uid {}", socket.uid);
+    if socket.has_mark && socket.net_id != 0 {
+        meta.push_str(&format!("  netId {}", socket.net_id));
+    }
+    if !socket.interface_name.is_empty() {
+        meta.push_str(&format!("  {}", socket.interface_name));
+    }
+    // Retransmits are the cheapest signal that a socket is connected but the
+    // path is not carrying its packets.
+    if socket.retransmits != 0 {
+        meta.push_str(&format!("  {} retx", socket.retransmits));
+    }
+
+    ui::SocketRow {
+        state: shared(tcp_state_label(state)),
+        status: socket_status(state),
+        tuple: shared(socket_tuple(socket)),
+        meta: shared(meta),
+        owner: shared(owner),
+    }
+}
+
+pub fn empty_sockets() -> ui::SocketsData {
+    ui::SocketsData {
+        summary: shared(""),
+        hidden: shared(""),
+        rows: model(Vec::<ui::SocketRow>::new()),
+    }
+}
+
+// ---- Capture ----------------------------------------------------------------
+
+/// One captured frame as a line a person can scan.
+///
+/// The daemon already decoded the headers into `PacketSummary`, so this does no
+/// parsing: guessing at bytes in two places is how the two sides end up
+/// disagreeing about what was on the wire.
+pub fn packet_row(packet: &proto::CapturedPacket) -> ui::PacketRow {
+    let summary = packet.summary.clone().unwrap_or_default();
+    let arrow = if packet.outgoing { "→" } else { "←" };
+
+    let decoded = match (summary.source.as_ref(), summary.destination.as_ref()) {
+        (Some(source), Some(destination)) => {
+            let port = |p: u32| if p == 0 { String::new() } else { format!(":{p}") };
+            Some(format!(
+                "{}{} {arrow} {}{}",
+                ip(source),
+                port(summary.source_port),
+                ip(destination),
+                port(summary.destination_port)
+            ))
+        }
+        _ => None,
+    };
+    // A frame the daemon could not decode is still worth showing; it is
+    // evidence that something unexpected is on the interface.
+    let endpoints = decoded
+        .clone()
+        .unwrap_or_else(|| format!("{arrow} {} bytes", packet.original_length));
+
+    let protocol = if summary.protocol_name.is_empty() {
+        format!("ip proto {}", summary.ip_protocol)
+    } else {
+        summary.protocol_name.clone()
+    };
+
+    let mut detail = format!("{protocol}  {} B", packet.original_length);
+    if packet.original_length as usize > packet.data.len() && !packet.data.is_empty() {
+        detail.push_str(&format!(" (captured {})", packet.data.len()));
+    }
+    let flags: String = [
+        (summary.syn, "SYN"),
+        (summary.ack, "ACK"),
+        (summary.fin, "FIN"),
+        (summary.rst, "RST"),
+        (summary.psh, "PSH"),
+    ]
+    .iter()
+    .filter(|(set, _)| *set)
+    .map(|(_, name)| *name)
+    .collect::<Vec<_>>()
+    .join(" ");
+    if !flags.is_empty() {
+        detail.push_str(&format!("  [{flags}]"));
+    }
+    // The daemon's description restates the endpoints it decoded, which the
+    // line above already shows. It is only worth printing when this side could
+    // not decode them — an ICMP error, say, where the description carries the
+    // reason and there is nothing else to go on.
+    if !summary.description.is_empty() && decoded.is_none() {
+        detail.push_str(&format!("  {}", summary.description));
+    }
+
+    ui::PacketRow {
+        time: shared(time_of_day(packet.unix_ms)),
+        // An ICMP "fragmentation needed" or "packet too big" is the whole
+        // reason this screen exists, so it is coloured as a finding.
+        status: if summary.icmp_mtu != 0 {
+            ui::Status::Fail
+        } else if summary.rst {
+            ui::Status::Warn
+        } else {
+            ui::Status::Skip
+        },
+        summary: shared(endpoints),
+        detail: shared(detail),
+    }
+}
+
+pub fn empty_capture() -> ui::CaptureData {
+    ui::CaptureData {
+        running: false,
+        interface: shared(""),
+        summary: shared(""),
+        error: shared(""),
+        saved_path: shared(""),
+        packets: model(Vec::<ui::PacketRow>::new()),
     }
 }

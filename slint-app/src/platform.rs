@@ -47,6 +47,20 @@ pub trait Platform: Send + Sync + 'static {
     fn take_framework_events(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<proto::NetworkEvent>> {
         None
     }
+
+    /// The lowest uid that belongs to something a person installed.
+    ///
+    /// Both platforms have the same notion — below this is the system itself —
+    /// but they draw it in different places, so the sockets screen asks rather
+    /// than hard-coding Android's answer and showing an empty list everywhere
+    /// else.
+    fn app_uid_floor(&self) -> u32;
+
+    /// Where a saved capture should go: somewhere the user can actually reach
+    /// it afterwards. On Android that is the app's external files directory,
+    /// which `adb pull` and any file manager can read; the internal one cannot
+    /// be reached without root, which defeats the point of saving.
+    fn download_dir(&self) -> std::path::PathBuf;
 }
 
 // ---- Desktop ----------------------------------------------------------------
@@ -80,6 +94,16 @@ pub mod desktop {
 
         fn describe(&self) -> String {
             "desktop harness · start the daemon with: sudo netdiagd --socket @netdiag".to_string()
+        }
+
+        fn app_uid_floor(&self) -> u32 {
+            // The conventional first human uid on Linux; below it are root and
+            // the system daemons.
+            1_000
+        }
+
+        fn download_dir(&self) -> std::path::PathBuf {
+            std::env::current_dir().unwrap_or_else(|_| std::env::temp_dir())
         }
     }
 }

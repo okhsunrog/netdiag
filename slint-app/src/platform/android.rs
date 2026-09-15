@@ -396,6 +396,20 @@ impl Platform for AndroidPlatform {
         }
     }
 
+    fn app_uid_floor(&self) -> u32 {
+        // AID_APP_START: the first uid Android hands to an installed app.
+        10_000
+    }
+
+    fn download_dir(&self) -> std::path::PathBuf {
+        // android-activity hands these over without JNI. External first: it is
+        // the one `adb pull` and a file manager can reach without root.
+        self.app
+            .external_data_path()
+            .or_else(|| self.app.internal_data_path())
+            .unwrap_or_else(std::env::temp_dir)
+    }
+
     fn start_daemon(&self) -> StartFuture {
         let path = self.daemon_path.clone();
         let package = self.package_name.clone();

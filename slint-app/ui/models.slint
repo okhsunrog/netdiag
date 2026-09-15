@@ -69,6 +69,29 @@ export struct SocketRow {
     status: Status,
     tuple: string,
     meta: string,
+    // Package names sharing this uid. Empty for system uids, which is the
+    // honest answer rather than inventing a label for them.
+    owner: string,
+}
+
+// One captured frame. The bytes stay in Rust: the UI only ever shows the
+// decoded summary, so a full-payload capture does not have to cross into the
+// view model to be saved later.
+export struct PacketRow {
+    time: string,
+    status: Status,
+    summary: string,
+    detail: string,
+}
+
+export struct CaptureData {
+    running: bool,
+    // Empty until the daemon reports which interface it actually opened.
+    interface: string,
+    summary: string,
+    error: string,
+    saved-path: string,
+    packets: [PacketRow],
 }
 
 export struct EventRow {
@@ -115,6 +138,13 @@ export struct AppDetailData {
     sockets: [SocketRow],
     socket-summary: string,
     firewall: string,
+}
+
+export struct SocketsData {
+    summary: string,
+    // What the filters removed, so an empty list is never a mystery.
+    hidden: string,
+    rows: [SocketRow],
 }
 
 export struct DiagnosisData {
