@@ -212,6 +212,12 @@ pub struct AndroidPlatform {
     daemon_path: String,
     package_name: String,
     uid: u32,
+    /// Taken once by the timeline. The watcher keeps running for the process
+    /// lifetime; there is no reason to stop and restart it per subscription.
+    framework_events: std::sync::Mutex<
+        Option<tokio::sync::mpsc::UnboundedReceiver<proto::NetworkEvent>>,
+    >,
+    _watcher: Option<super::watcher::FrameworkWatcherHandle>,
 }
 
 impl AndroidPlatform {
@@ -253,16 +259,32 @@ impl AndroidPlatform {
             })
             .map_err(|e| anyhow::anyhow!("could not read the app context: {e}"))?;
 
+        // Start watching immediately. A failure here costs the framework half
+        // of the timeline but nothing else, so it is a warning rather than a
+        // reason to refuse to start.
+        let (events, watcher) = match super::watcher::install(&app) {
+            Ok((events, watcher)) => (Some(events), Some(watcher)),
+            Err(e) => {
+                warn!("framework event watcher unavailable: {e}");
+                (None, None)
+            }
+        };
+
         Ok(Arc::new(Self {
             app,
             daemon_path,
             package_name,
             uid,
+            framework_events: std::sync::Mutex::new(events),
+            _watcher: watcher,
         }))
     }
 }
 
-fn activity_object<'a>(env: &Env<'a>, app: &slint::android::AndroidApp) -> JObject<'a> {
+pub(super) fn activity_object<'a>(
+    env: &Env<'a>,
+    app: &slint::android::AndroidApp,
+) -> JObject<'a> {
     // SAFETY: activity_as_ptr() returns the process's Activity jobject, which
     // stays alive for as long as the app does.
     unsafe { JObject::from_raw(env, app.activity_as_ptr() as *mut _) }
@@ -340,6 +362,12 @@ impl Platform for AndroidPlatform {
 
     fn describe(&self) -> String {
         format!("uid {} · {}", self.uid, self.daemon_path)
+    }
+
+    fn take_framework_events(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<proto::NetworkEvent>> {
+        self.framework_events.lock().ok()?.take()
     }
 }
 

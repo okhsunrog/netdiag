@@ -120,16 +120,11 @@ of binding declarations covering less ground.
 
 ### Two things were not built
 
-- **`NetworkCallback`** for framework-side timeline events. Subclassing a Java
-  abstract class needs a compiled Java shim in the APK. Slint's own Android
-  backend already ships one, so the machinery is not exotic — but adding a
-  second means owning a `javac` step in a build whose appeal is that it is just
-  `cargo`. The Slint timeline therefore shows kernel events only.
 - **`PackageManager.getInstalledApplications`**. A `List<ApplicationInfo>` plus
   a per-entry label lookup is a lot of JNI for a list, so the Slint app's
   per-app screen offers only its own uid.
 
-Both are doable. Neither is free, and both are free in Kotlin.
+`NetworkCallback` *was* on this list and is now built; see below.
 
 ### Toolchain friction
 
@@ -151,6 +146,60 @@ Two things that cost real time and are worth knowing before starting:
 - **A `Window` with no size collapses.** Android ignores it, but on the desktop
   the window shrinks to its minimum and every screen looks broken until
   `preferred-width`/`preferred-height` are set.
+
+## The one piece that has to be Java
+
+`ConnectivityManager.NetworkCallback` must be subclassed to receive anything,
+and Rust cannot subclass a Java abstract class. So `java/` holds exactly one
+file, compiled by `build.rs` with the [`android-build`] crate (javac + d8) and
+embedded with `include_bytes!`, then loaded at runtime through
+`InMemoryDexClassLoader`.
+
+[`android-build`]: https://crates.io/crates/android-build
+
+Nothing about the APK changes — the dex rides inside the `.so`, so there is no
+Gradle, no manifest edit and no packaging step. This is the same approach
+Slint's own Android backend uses for its helper, and `android-build` was
+already in the dependency tree because of it.
+
+### Why the shim carries no protobuf
+
+The first design had the Java class build real protobuf messages, so the
+`.proto` would be the contract on that hop too. Measuring killed it:
+
+| | dex |
+|---|---|
+| The shim as built | **5.2 KB** |
+| With protobuf-javalite, R8-shrunk | 242 KB |
+| With protobuf-javalite, unshrunk | 1.0 MB |
+
+Size was not even the deciding factor. Without Gradle there is no dependency
+resolution, so the jar would have to be vendored into the repository or
+downloaded from `build.rs`, and protobuf-lite's reflective dispatch needs
+careful R8 keep rules.
+
+The deeper reason is that the hop does not deserve a schema at all. Protobuf
+here exists to cross the boundary between the app and the daemon: two
+separately built artifacts that can be different versions, and where the app
+may be Kotlin. The shim is compiled by the same build script that compiles the
+Rust consuming it, embedded in the same `.so`, loaded by the same process. It
+cannot be version-skewed, and a schema protects against skew. Putting protobuf
+there was pattern-matching from the Compose build, where Kotlin legitimately
+constructs these messages because Kotlin *is* the app.
+
+So the shim has its own seven-value vocabulary, and one Rust function maps it
+onto the wire enums. The single failure mode that design has — someone
+renumbering the Java constants without updating the table — is covered by a test
+that parses the constants out of the Java source. It lives in a module that is
+deliberately *not* gated on `target_os = "android"`, so it runs under an
+ordinary `cargo test` rather than only on a device.
+
+### Toolchain guard
+
+`build.rs` checks the JDK before doing anything, because both failure modes are
+otherwise a wall of javac output: JDK 22+ rejects the `-source 8` that Slint's
+backend uses for its own helper, and older JDKs cannot read the SDK's class
+files. It fails with the range and an example command instead.
 
 ## Where FlexboxLayout earned its place
 

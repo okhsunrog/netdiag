@@ -436,6 +436,20 @@ fn wire_timeline(app: &ui::App) {
 fn start_timeline(weak: slint::Weak<ui::App>, state: Arc<AppState>) {
     let Some(client) = state.client() else { return };
 
+    // Framework events come from the platform, not the daemon, and land on the
+    // same timeline so the lag between "the kernel changed" and "the framework
+    // noticed" is visible.
+    if let Some(mut framework) = state.platform.take_framework_events() {
+        let weak = weak.clone();
+        state.runtime.clone_handle().spawn(async move {
+            while let Some(event) = framework.recv().await {
+                on_ui(weak.clone(), event, |app, event| {
+                    push_event(app, view::event_row(&event));
+                });
+            }
+        });
+    }
+
     state.runtime.clone_handle().spawn(async move {
         let Ok((_id, mut rx)) = client
             .stream(proto::client_frame::Body::WatchNetwork(

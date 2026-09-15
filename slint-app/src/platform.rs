@@ -38,6 +38,15 @@ pub trait Platform: Send + Sync + 'static {
 
     /// One line for the connect screen, so it is obvious which mode this is.
     fn describe(&self) -> String;
+
+    /// Framework-side events, where the platform can produce them.
+    ///
+    /// `None` off Android: there is no `ConnectivityManager` to watch, and the
+    /// timeline then shows kernel events only rather than inventing any.
+    /// Returns the receiver once; later calls give `None`.
+    fn take_framework_events(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<proto::NetworkEvent>> {
+        None
+    }
 }
 
 // ---- Desktop ----------------------------------------------------------------
@@ -75,10 +84,17 @@ pub mod desktop {
     }
 }
 
+/// The Java shim's vocabulary. Host-compilable on purpose, so its drift test
+/// runs in a normal `cargo test`.
+pub mod shim;
+
 // ---- Android ----------------------------------------------------------------
 
 #[cfg(target_os = "android")]
 pub mod android;
+
+#[cfg(target_os = "android")]
+pub mod watcher;
 
 #[cfg(target_os = "android")]
 pub use android::AndroidPlatform;
