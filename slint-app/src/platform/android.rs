@@ -30,6 +30,9 @@
 use std::sync::Arc;
 
 use jni::objects::{JClassLoader, JObject, LoaderContext};
+// The SDK types are generated from android.jar by jbindgen; see lib.rs.
+use crate::android::net::{ConnectivityManager, LinkProperties, Network};
+use crate::java::net::InetAddress;
 use jni::sys::jint;
 use jni::{Env, JavaVM, bind_java_type};
 use netdiag_ipc::proto;
@@ -85,141 +88,90 @@ bind_java_type! {
     },
 }
 
-bind_java_type! {
-    ConnectivityManager => android.net.ConnectivityManager,
-    type_map = {
-        Network => "android.net.Network",
-        NetworkCapabilities => "android.net.NetworkCapabilities",
-        LinkProperties => "android.net.LinkProperties",
-    },
-    methods {
-        fn get_active_network {
-            name = "getActiveNetwork",
-            sig = () -> Network,
-        },
-        fn get_all_networks {
-            name = "getAllNetworks",
-            sig = () -> [Network],
-        },
-        fn get_network_capabilities {
-            name = "getNetworkCapabilities",
-            sig = (network: Network) -> NetworkCapabilities,
-        },
-        fn get_link_properties {
-            name = "getLinkProperties",
-            sig = (network: Network) -> LinkProperties,
-        },
-        fn get_restrict_background_status {
-            name = "getRestrictBackgroundStatus",
-            sig = () -> jint,
-        },
-    },
+
+
+
+
+
+
+/// The SDK constants this app reads, resolved once from the generated
+/// bindings instead of copied in as integer literals.
+///
+/// This is what jbindgen buys over a hand-written binding: the names come from
+/// `android.jar`, so a capability renamed or removed is a build failure here
+/// rather than a value that silently reads as false on a device.
+///
+/// They are cached because each one is a JNI static-field read, not a compile
+/// time constant. Reading eleven of them per network per refresh would undo
+/// most of what the generated bindings are worth.
+struct Capabilities {
+    values: Vec<(jint, CapabilityField)>,
+    transports: Vec<(jint, proto::Transport)>,
 }
 
-bind_java_type! {
-    Network => android.net.Network,
-    methods {
-        fn get_network_handle {
-            name = "getNetworkHandle",
-            sig = () -> jlong,
-        },
-    },
+#[derive(Clone, Copy)]
+enum CapabilityField {
+    Internet,
+    Validated,
+    CaptivePortal,
+    NotRestricted,
+    NotMetered,
+    NotRoaming,
+    NotCongested,
+    NotSuspended,
+    NotVpn,
+    Trusted,
+    Foreground,
 }
 
-bind_java_type! {
-    NetworkCapabilities => android.net.NetworkCapabilities,
-    methods {
-        fn has_capability {
-            name = "hasCapability",
-            sig = (capability: jint) -> jboolean,
-        },
-        fn has_transport {
-            name = "hasTransport",
-            sig = (transport: jint) -> jboolean,
-        },
-    },
+impl Capabilities {
+    fn resolve(env: &mut Env<'_>) -> Result<Self, jni::errors::Error> {
+        use crate::android::net::NetworkCapabilities as Caps;
+        use CapabilityField::*;
+
+        Ok(Self {
+            values: vec![
+                (Caps::NET_CAPABILITY_INTERNET(env)?, Internet),
+                (Caps::NET_CAPABILITY_VALIDATED(env)?, Validated),
+                (Caps::NET_CAPABILITY_CAPTIVE_PORTAL(env)?, CaptivePortal),
+                (Caps::NET_CAPABILITY_NOT_RESTRICTED(env)?, NotRestricted),
+                (Caps::NET_CAPABILITY_NOT_METERED(env)?, NotMetered),
+                (Caps::NET_CAPABILITY_NOT_ROAMING(env)?, NotRoaming),
+                (Caps::NET_CAPABILITY_NOT_CONGESTED(env)?, NotCongested),
+                (Caps::NET_CAPABILITY_NOT_SUSPENDED(env)?, NotSuspended),
+                (Caps::NET_CAPABILITY_NOT_VPN(env)?, NotVpn),
+                (Caps::NET_CAPABILITY_TRUSTED(env)?, Trusted),
+                (Caps::NET_CAPABILITY_FOREGROUND(env)?, Foreground),
+            ],
+            transports: vec![
+                (Caps::TRANSPORT_CELLULAR(env)?, proto::Transport::Cellular),
+                (Caps::TRANSPORT_WIFI(env)?, proto::Transport::Wifi),
+                (Caps::TRANSPORT_BLUETOOTH(env)?, proto::Transport::Bluetooth),
+                (Caps::TRANSPORT_ETHERNET(env)?, proto::Transport::Ethernet),
+                (Caps::TRANSPORT_VPN(env)?, proto::Transport::Vpn),
+                (Caps::TRANSPORT_USB(env)?, proto::Transport::Usb),
+            ],
+        })
+    }
+
+    fn apply(&self, field: CapabilityField, info: &mut proto::NetworkCapabilitiesInfo) {
+        use CapabilityField::*;
+        let slot = match field {
+            Internet => &mut info.internet,
+            Validated => &mut info.validated,
+            CaptivePortal => &mut info.captive_portal,
+            NotRestricted => &mut info.not_restricted,
+            NotMetered => &mut info.not_metered,
+            NotRoaming => &mut info.not_roaming,
+            NotCongested => &mut info.not_congested,
+            NotSuspended => &mut info.not_suspended,
+            NotVpn => &mut info.not_vpn,
+            Trusted => &mut info.trusted,
+            Foreground => &mut info.foreground,
+        };
+        *slot = true;
+    }
 }
-
-bind_java_type! {
-    LinkProperties => android.net.LinkProperties,
-    type_map = {
-        JavaList => "java.util.List",
-    },
-    methods {
-        fn get_interface_name {
-            name = "getInterfaceName",
-            sig = () -> JString,
-        },
-        fn get_mtu {
-            name = "getMtu",
-            sig = () -> jint,
-        },
-        fn get_dns_servers {
-            name = "getDnsServers",
-            sig = () -> JavaList,
-        },
-        fn get_domains {
-            name = "getDomains",
-            sig = () -> JString,
-        },
-        fn is_private_dns_active {
-            name = "isPrivateDnsActive",
-            sig = () -> jboolean,
-        },
-        fn get_private_dns_server_name {
-            name = "getPrivateDnsServerName",
-            sig = () -> JString,
-        },
-    },
-}
-
-bind_java_type! {
-    JavaList => java.util.List,
-    methods {
-        fn size {
-            name = "size",
-            sig = () -> jint,
-        },
-        fn get {
-            name = "get",
-            sig = (index: jint) -> JObject,
-        },
-    },
-}
-
-bind_java_type! {
-    InetAddress => java.net.InetAddress,
-    methods {
-        fn get_address {
-            name = "getAddress",
-            sig = () -> [jbyte],
-        },
-    },
-}
-
-// NET_CAPABILITY_* and TRANSPORT_* values. They are part of the platform ABI
-// and stable across releases; the Kotlin build gets them as named constants
-// from the SDK instead.
-const NET_CAPABILITY_NOT_METERED: jint = 11;
-const NET_CAPABILITY_INTERNET: jint = 12;
-const NET_CAPABILITY_NOT_RESTRICTED: jint = 13;
-const NET_CAPABILITY_TRUSTED: jint = 14;
-const NET_CAPABILITY_NOT_VPN: jint = 15;
-const NET_CAPABILITY_VALIDATED: jint = 16;
-const NET_CAPABILITY_CAPTIVE_PORTAL: jint = 17;
-const NET_CAPABILITY_NOT_ROAMING: jint = 18;
-const NET_CAPABILITY_FOREGROUND: jint = 19;
-const NET_CAPABILITY_NOT_CONGESTED: jint = 20;
-const NET_CAPABILITY_NOT_SUSPENDED: jint = 21;
-
-const TRANSPORTS: &[(jint, proto::Transport)] = &[
-    (0, proto::Transport::Cellular),
-    (1, proto::Transport::Wifi),
-    (2, proto::Transport::Bluetooth),
-    (3, proto::Transport::Ethernet),
-    (4, proto::Transport::Vpn),
-    (7, proto::Transport::Usb),
-];
 
 /// `Network.getNetworkHandle()` packs the netId into the high 32 bits. The
 /// netId is what appears in routing table numbers and socket fwmarks, so it is
@@ -489,6 +441,7 @@ fn collect_framework_state(
         let service_name = env.new_string("connectivity")?;
         let manager_object = context.get_system_service(env, &service_name)?;
         let mut manager = ConnectivityManager::cast_local(env, manager_object)?;
+        let constants = Capabilities::resolve(env)?;
 
         let active_handle = match manager.get_active_network(env) {
             Ok(network) if !network.is_null() => {
@@ -517,7 +470,7 @@ fn collect_framework_state(
             if element.is_null() {
                 continue;
             }
-            match describe_network(env, &mut manager, element, active_handle) {
+            match describe_network(env, &mut manager, element, active_handle, &constants) {
                 Ok(network) => state.networks.push(network),
                 Err(e) => debug!("skipping a network: {e}"),
             }
@@ -532,6 +485,7 @@ fn describe_network(
     manager: &mut ConnectivityManager<'_>,
     network_object: Network<'_>,
     active_handle: u64,
+    constants: &Capabilities,
 ) -> Result<proto::AndroidNetwork, jni::errors::Error> {
     let network = network_object;
     let handle = network.get_network_handle(env)? as u64;
@@ -547,26 +501,19 @@ fn describe_network(
         && !caps.is_null()
     {
         let caps = caps;
-        for (value, transport) in TRANSPORTS {
+        for (value, transport) in &constants.transports {
             if caps.has_transport(env, *value).unwrap_or(false) {
                 result.transports.push(*transport as i32);
             }
         }
-        let has = |capability: jint| caps.has_capability(env, capability).unwrap_or(false);
-        result.capabilities = Some(proto::NetworkCapabilitiesInfo {
-            internet: has(NET_CAPABILITY_INTERNET),
-            validated: has(NET_CAPABILITY_VALIDATED),
-            captive_portal: has(NET_CAPABILITY_CAPTIVE_PORTAL),
-            not_restricted: has(NET_CAPABILITY_NOT_RESTRICTED),
-            not_metered: has(NET_CAPABILITY_NOT_METERED),
-            not_roaming: has(NET_CAPABILITY_NOT_ROAMING),
-            not_congested: has(NET_CAPABILITY_NOT_CONGESTED),
-            not_suspended: has(NET_CAPABILITY_NOT_SUSPENDED),
-            not_vpn: has(NET_CAPABILITY_NOT_VPN),
-            trusted: has(NET_CAPABILITY_TRUSTED),
-            foreground: has(NET_CAPABILITY_FOREGROUND),
-            ..Default::default()
-        });
+
+        let mut info = proto::NetworkCapabilitiesInfo::default();
+        for (value, field) in &constants.values {
+            if caps.has_capability(env, *value).unwrap_or(false) {
+                constants.apply(*field, &mut info);
+            }
+        }
+        result.capabilities = Some(info);
     }
 
     if let Ok(link) = manager.get_link_properties(env, &network)
