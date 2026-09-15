@@ -20,8 +20,8 @@ import java.util.HashMap;
  * <p>It is deliberately thin, and it knows nothing about the wire schema. The
  * protobuf in this project exists to cross the boundary between the app and the
  * daemon: two separately built artifacts that can be different versions. This
- * class is not such a boundary. It is compiled by the same build script that
- * compiles the Rust consuming it, embedded in the same .so and loaded by the
+ * class is not such a boundary. It is compiled by the same {@code cargo rapk}
+ * invocation as the Rust consuming it, into the same APK, and loaded by the
  * same process, so the two can never be version-skewed. A schema protects
  * against skew, and there is none to protect against.
  *
@@ -174,8 +174,13 @@ public final class NetdiagFrameworkWatcher extends ConnectivityManager.NetworkCa
     }
 
     /**
-     * Implemented in Rust. The symbol is exported by the app's own .so, so the
-     * VM resolves it without an explicit RegisterNatives call.
+     * Implemented in Rust, and bound with {@code RegisterNatives} before this
+     * watcher is started.
+     *
+     * <p>Symbol lookup cannot resolve it. {@code NativeActivity} brings the
+     * app's library up by {@code dlopen}, not {@code System.loadLibrary}, so
+     * the VM has no record of it and never searches it — whatever class loader
+     * this class came from.
      */
     private static native void onFrameworkEvent(
             int kind, int severity, long networkHandle, String summary);

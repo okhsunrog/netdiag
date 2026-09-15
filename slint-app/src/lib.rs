@@ -18,7 +18,9 @@ pub mod ui {
 #[unsafe(no_mangle)]
 fn android_main(android_app: slint::android::AndroidApp) {
     android_logger::init_once(
-        android_logger::Config::default().with_max_level(log::LevelFilter::Info),
+        android_logger::Config::default()
+            .with_max_level(log::LevelFilter::Debug)
+            .with_tag("netdiag"),
     );
 
     if let Err(e) = run_android(android_app) {

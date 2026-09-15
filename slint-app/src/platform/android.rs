@@ -13,20 +13,23 @@
 //! a use of it, and the transcription is only as right as the person writing
 //! it.
 //!
-//! Two things are deliberately *not* here:
+//! Two things are deliberately not done here, and both live in `java/` instead:
 //!
-//! * **`NetworkCallback`.** Subclassing a Java abstract class needs a compiled
-//!   Java shim in the APK. Slint's own Android backend already ships one, so
-//!   the machinery exists, but adding a second means owning a `javac` step in a
-//!   build whose appeal is that it is just `cargo`. The framework half of the
-//!   timeline is therefore absent rather than half-built.
-//! * **`PackageManager.getInstalledApplications`.** A `List<ApplicationInfo>`
-//!   plus a label lookup per entry is a lot of JNI for a list; this app's own
-//!   uid is enough to make the per-app screen demonstrable.
+//! * **`NetworkCallback`** must be subclassed to receive anything, and Rust
+//!   cannot subclass a Java abstract class. See `watcher.rs`.
+//! * **`PackageManager.getInstalledApplications`** is a `List<ApplicationInfo>`
+//!   plus a label lookup per entry: several hundred JNI round trips for what is
+//!   four lines of Java. `NetdiagPackages` builds the list and hands it over as
+//!   one string; `collect_installed_apps` below is the whole Rust side.
+//!
+//! Both used to be reasons the Slint frontend simply did less than the Compose
+//! one. Neither was a JNI problem: they were a *packaging* problem, because
+//! `cargo-apk` cannot put a class in an APK. `cargo rapk` can, which turned
+//! "too expensive to transcribe" into "write it where it is cheap".
 
 use std::sync::Arc;
 
-use jni::objects::JObject;
+use jni::objects::{JClassLoader, JObject, LoaderContext};
 use jni::sys::jint;
 use jni::{Env, JavaVM, bind_java_type};
 use netdiag_ipc::proto;
@@ -53,6 +56,22 @@ bind_java_type! {
         fn get_application_info {
             name = "getApplicationInfo",
             sig = () -> ApplicationInfo,
+        },
+    },
+}
+
+bind_java_type! {
+    NetdiagPackages => "dev.okhsunrog.netdiag.NetdiagPackages",
+    type_map = {
+        Context => "android.content.Context",
+    },
+    constructors {
+        fn new(context: Context),
+    },
+    methods {
+        fn list {
+            name = "list",
+            sig = () -> JString,
         },
     },
 }
@@ -279,6 +298,38 @@ impl AndroidPlatform {
             _watcher: watcher,
         }))
     }
+
+    /// The fallback when `PackageManager` cannot be read.
+    fn only_this_app(&self) -> InstalledApp {
+        InstalledApp {
+            package: self.package_name.clone(),
+            label: format!("{} (this app)", self.package_name),
+            uid: self.uid,
+            is_system: false,
+        }
+    }
+}
+
+/// Ask the Java shim for every installed application.
+///
+/// The whole list crosses in one string. Building it in Java costs one JNI call
+/// instead of the several hundred that walking `List<ApplicationInfo>` and
+/// calling `getApplicationLabel` per entry from Rust would take.
+fn collect_installed_apps(
+    app: &slint::android::AndroidApp,
+) -> Result<Vec<InstalledApp>, jni::errors::Error> {
+    JavaVM::singleton()?.attach_current_thread(|env| {
+        let loader = app_class_loader(env, app)?;
+        NetdiagPackagesAPI::get(env, &LoaderContext::Loader(&loader))?;
+
+        let activity = activity_object(env, app);
+        let context = Context::cast_local(env, activity)?;
+        let packages = NetdiagPackages::new(env, &context)?;
+
+        let listing = packages.list(env)?;
+        let listing = listing.try_to_string(env)?;
+        Ok(super::shim::parse_packages(&listing))
+    })
 }
 
 pub(super) fn activity_object<'a>(
@@ -288,6 +339,31 @@ pub(super) fn activity_object<'a>(
     // SAFETY: activity_as_ptr() returns the process's Activity jobject, which
     // stays alive for as long as the app does.
     unsafe { JObject::from_raw(env, app.activity_as_ptr() as *mut _) }
+}
+
+bind_java_type! {
+    ContextWithLoader => android.content.Context,
+    methods {
+        fn get_class_loader {
+            name = "getClassLoader",
+            sig = () -> JClassLoader,
+        },
+    },
+}
+
+/// The class loader that defined this app's own classes.
+///
+/// Needed for every class in `java/`. These calls happen on threads attached
+/// from native code, and there `FindClass` searches the *system* loader, which
+/// holds only platform classes — so an app class is not found unless the lookup
+/// is handed this loader explicitly.
+pub(super) fn app_class_loader<'a>(
+    env: &mut Env<'a>,
+    app: &slint::android::AndroidApp,
+) -> Result<JClassLoader<'a>, jni::errors::Error> {
+    let activity = activity_object(env, app);
+    let context = ContextWithLoader::cast_local(env, activity)?;
+    context.get_class_loader(env)
 }
 
 impl Platform for AndroidPlatform {
@@ -305,12 +381,19 @@ impl Platform for AndroidPlatform {
     }
 
     fn installed_apps(&self) -> Vec<InstalledApp> {
-        vec![InstalledApp {
-            package: self.package_name.clone(),
-            label: format!("{} (this app)", self.package_name),
-            uid: self.uid,
-            is_system: false,
-        }]
+        match collect_installed_apps(&self.app) {
+            Ok(apps) if !apps.is_empty() => apps,
+            Ok(_) => {
+                warn!("PackageManager returned no applications");
+                vec![self.only_this_app()]
+            }
+            Err(e) => {
+                // The per-app screen still works against this app's own uid,
+                // which is enough to demonstrate the correlation.
+                warn!("could not list installed applications: {e}");
+                vec![self.only_this_app()]
+            }
+        }
     }
 
     fn start_daemon(&self) -> StartFuture {
@@ -335,13 +418,24 @@ impl Platform for AndroidPlatform {
             );
             debug!("starting the daemon: {command}");
 
-            let status = tokio::process::Command::new("su")
+            // Absolute path rather than relying on PATH, and the error says
+            // which step failed: a bare "os error 2" could be su, the shell or
+            // the daemon, and they need different fixes.
+            let su = ["/system/bin/su", "/su/bin/su", "su"]
+                .into_iter()
+                .find(|candidate| {
+                    *candidate == "su" || std::path::Path::new(candidate).exists()
+                })
+                .unwrap_or("su");
+
+            let status = tokio::process::Command::new(su)
                 .arg("-c")
                 .arg(&command)
                 .status()
-                .await?;
+                .await
+                .map_err(|e| anyhow::anyhow!("could not run {su}: {e}"))?;
             if !status.success() {
-                anyhow::bail!("su refused to start the daemon (exit {status})");
+                anyhow::bail!("{su} refused to start the daemon (exit {status})");
             }
 
             // Poll rather than sleeping a fixed amount: a fast device should

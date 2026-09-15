@@ -37,3 +37,7 @@
 
 # Slint frontend: the daemon copy the APK bundles is a build artefact
 /slint-app/runtime-libs/
+# Its own cargo workspace, so the root /target/ rule does not cover it. This
+# only appears when CARGO_BUILD_BUILD_DIR=target is used to work around
+# cargo-apk's assumption about where intermediates live.
+/slint-app/target/

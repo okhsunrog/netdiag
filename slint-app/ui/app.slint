@@ -568,6 +568,14 @@ export component App inherits Window {
     changed app-filter => { root.filter-changed(self.app-filter); }
 
     VerticalLayout {
+        // Android draws the app under the status bar and the gesture bar, so
+        // the window's own insets have to be honoured or the title sits behind
+        // the clock and the bottom tabs behind the navigation pill.
+        padding-top: root.safe-area-insets.top;
+        padding-bottom: root.safe-area-insets.bottom;
+        padding-left: root.safe-area-insets.left;
+        padding-right: root.safe-area-insets.right;
+
         // Top bar.
         Rectangle {
             background: Palette.surface;

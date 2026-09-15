@@ -2712,7 +2712,6 @@ dependencies = [
 name = "netdiag-slint"
 version = "0.1.0"
 dependencies = [
- "android-build",
  "android_logger",
  "anyhow",
  "jni 0.22.4",

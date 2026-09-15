@@ -209,8 +209,12 @@ pub fn route_line(route: &proto::Route) -> String {
 }
 
 /// Render a rule the way `ip rule` shows it.
+///
+/// `ip rule` separates the priority with a tab. This does not: Slint's text
+/// rendering has no tab stops and draws the character as a missing glyph, so on
+/// the device it came out as `13000:▯fwmark`.
 pub fn rule_line(rule: &proto::RoutingRule) -> String {
-    let mut line = format!("{}:\t", rule.priority);
+    let mut line = format!("{}: ", rule.priority);
     if let Some(source) = &rule.source
         && source.address.is_some()
     {
@@ -290,14 +294,38 @@ pub fn socket_status(state: proto::TcpState) -> ui::Status {
 
 /// HH:MM:SS.mmm in local time, without pulling in a date library for one
 /// format string.
+///
+/// The timeline is read next to the device's own clock — the user notices a
+/// three-hour offset immediately — so this has to be local, not UTC.
 pub fn time_of_day(unix_ms: i64) -> String {
     let total_seconds = unix_ms.div_euclid(1000);
     let millis = unix_ms.rem_euclid(1000);
-    let seconds_today = total_seconds.rem_euclid(86_400);
+    let seconds_today = (total_seconds + utc_offset_seconds(total_seconds)).rem_euclid(86_400);
     let hours = seconds_today / 3600;
     let minutes = (seconds_today % 3600) / 60;
     let seconds = seconds_today % 60;
     format!("{hours:02}:{minutes:02}:{seconds:02}.{millis:03}")
+}
+
+/// Seconds east of UTC at the given instant, from the C library.
+///
+/// `localtime_r` is asked for the offset *at that timestamp* rather than at
+/// startup, so an event recorded either side of a DST change still renders with
+/// the offset that was in force when it happened. On Android this reads the
+/// `persist.sys.timezone` the framework sets, so it follows the device.
+fn utc_offset_seconds(unix_seconds: i64) -> i64 {
+    // SAFETY: `tm` is fully written by localtime_r before it is read, and the
+    // call is the reentrant variant, so it does not touch shared state.
+    unsafe {
+        let mut tm: libc::tm = std::mem::zeroed();
+        let time = unix_seconds as libc::time_t;
+        if libc::localtime_r(&time, &mut tm).is_null() {
+            // No timezone database, or a timestamp it cannot represent. UTC is
+            // wrong but readable; refusing to render a time would be worse.
+            return 0;
+        }
+        tm.tm_gmtoff as i64
+    }
 }
 
 pub fn bytes(value: u64) -> String {
@@ -381,7 +409,7 @@ mod tests {
         };
         assert_eq!(
             rule_line(&rule),
-            "16000:\tnot uidrange 10342-10342 lookup vpn_fallthrough"
+            "16000: not uidrange 10342-10342 lookup vpn_fallthrough"
         );
     }
 
@@ -397,7 +425,7 @@ mod tests {
         };
         assert_eq!(
             rule_line(&rule),
-            "13000:\tfwmark 0xc0067/0xcffff lookup 1051"
+            "13000: fwmark 0xc0067/0xcffff lookup 1051"
         );
     }
 
@@ -415,9 +443,37 @@ mod tests {
 
     #[test]
     fn time_of_day_keeps_milliseconds() {
-        // 1970-01-01T01:02:03.456Z
-        let ms = (3600 + 120 + 3) * 1000 + 456;
-        assert_eq!(time_of_day(ms), "01:02:03.456");
+        // 1970-01-01T01:02:03.456Z, shifted so the expectation holds whatever
+        // zone the test machine is in.
+        let utc_seconds = 3600 + 120 + 3;
+        let ms = utc_seconds * 1000 + 456;
+        let local = (utc_seconds + utc_offset_seconds(utc_seconds)).rem_euclid(86_400);
+        let expected = format!(
+            "{:02}:{:02}:{:02}.456",
+            local / 3600,
+            (local % 3600) / 60,
+            local % 60
+        );
+        assert_eq!(time_of_day(ms), expected);
+    }
+
+    #[test]
+    fn time_of_day_is_local_not_utc() {
+        // The bug this guards against: rendering UTC while sitting next to the
+        // device's own clock. It can only be observed where the two differ, so
+        // on a UTC machine this asserts nothing and passes.
+        let now = 1_757_000_000_i64;
+        if utc_offset_seconds(now) == 0 {
+            return;
+        }
+        let utc_today = now.rem_euclid(86_400);
+        let as_utc = format!(
+            "{:02}:{:02}:{:02}.000",
+            utc_today / 3600,
+            (utc_today % 3600) / 60,
+            utc_today % 60
+        );
+        assert_ne!(time_of_day(now * 1000), as_utc);
     }
 
     #[test]

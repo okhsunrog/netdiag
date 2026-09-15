@@ -4,10 +4,9 @@
 //! `ConnectivityManager.NetworkCallback`, which Rust cannot do, filters the
 //! callback noise, and calls one `native` method per event worth showing.
 //!
-//! The dex containing that class is compiled by `build.rs` and embedded here
-//! with `include_bytes!`, then loaded at runtime through
-//! `InMemoryDexClassLoader`. Nothing is added to the APK: the class rides
-//! inside the `.so`.
+//! `cargo rapk` compiles that class into the APK's own `classes.dex`, so it is
+//! an ordinary application class: defined by the app's class loader, like
+//! anything Gradle would have produced.
 //!
 //! The direction of travel matters. Everything else in this app calls *into*
 //! Java; this is Java calling *into* Rust, which is why it needs an exported
@@ -15,7 +14,7 @@
 
 use std::sync::OnceLock;
 
-use jni::objects::{JClass, JClassLoader, JString, LoaderContext};
+use jni::objects::{JClass, JString, LoaderContext};
 use jni::sys::{jint, jlong};
 use jni::{Env, JavaVM, bind_java_type, native_method};
 use netdiag_ipc::proto;
@@ -24,36 +23,21 @@ use super::shim::{event_kind, event_severity};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
-/// The dex produced by `build.rs` from the single Java source file.
-const DEX_DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/classes.dex"));
-
+// Only to name the constructor's parameter type. The class loader comes from
+// `android::app_class_loader`; a `bind_java_type!` binding is private to the
+// invocation that declares it, so the Java type is named in both places rather
+// than the Rust type being shared.
 bind_java_type! {
-    InMemoryDexClassLoader => "dalvik.system.InMemoryDexClassLoader",
-    constructors {
-        fn new(dex_buffer: JByteBuffer, parent: JClassLoader),
-    },
-    is_instance_of = {
-        JClassLoader,
-    },
-}
-
-bind_java_type! {
-    ContextForLoader => "android.content.Context",
-    methods {
-        fn get_class_loader {
-            name = "getClassLoader",
-            sig = () -> JClassLoader,
-        },
-    },
+    WatcherContext => android.content.Context,
 }
 
 bind_java_type! {
     FrameworkWatcher => "dev.okhsunrog.netdiag.NetdiagFrameworkWatcher",
     type_map = {
-        ContextForLoader => "android.content.Context",
+        WatcherContext => "android.content.Context",
     },
     constructors {
-        fn new(context: ContextForLoader),
+        fn new(context: WatcherContext),
     },
     methods {
         fn start { name = "start", sig = (), },
@@ -67,11 +51,19 @@ bind_java_type! {
 /// there is nowhere else to put the destination.
 static EVENT_SINK: OnceLock<mpsc::UnboundedSender<proto::NetworkEvent>> = OnceLock::new();
 
-/// The exported native method.
+/// The native method Java calls into.
 ///
-/// `extern` makes the macro emit the JNI-mangled symbol, so the VM resolves it
-/// from the app's own `.so` without a `RegisterNatives` call. Referenced from
-/// [`install`] so the linker cannot decide it is unused.
+/// It must be bound by pointer; symbol lookup cannot find it, and moving the
+/// class into the APK did not change that. `native_method!` does export
+/// `Java_dev_okhsunrog_netdiag_..._onFrameworkEvent__IIJLjava_lang_String_2`
+/// from this `.so` — the VM even names that symbol in the error — but it
+/// searches only libraries the VM knows are loaded, and it does not know about
+/// this one. `NativeActivity` starts an app by `dlopen`ing its library from
+/// `loadNativeCode`, not through `System.loadLibrary`, so nothing registers it
+/// against a class loader.
+///
+/// That makes `RegisterNatives` structural for a `NativeActivity` app rather
+/// than a consequence of how the class is packaged.
 const ON_FRAMEWORK_EVENT: jni::NativeMethod = native_method! {
     java_type = "dev.okhsunrog.netdiag.NetdiagFrameworkWatcher",
     static extern fn on_framework_event(
@@ -165,35 +157,30 @@ pub fn install(
     }
 
     let watcher = JavaVM::singleton()?.attach_current_thread(|env| {
-        let activity = super::android::activity_object(env, app);
-
-        // The dex has to be loaded through a loader that can still see the
-        // platform classes, so the app's own loader is the parent.
-        let activity_ref = env.new_local_ref(&activity)?;
-        let context = ContextForLoader::cast_local(env, activity_ref)?;
-        let parent = context.get_class_loader(env)?;
-
-        // SAFETY: DEX_DATA is 'static and InMemoryDexClassLoader only reads it.
-        let dex_buffer =
-            unsafe { env.new_direct_byte_buffer(DEX_DATA.as_ptr() as *mut _, DEX_DATA.len())? };
-        let dex_loader = InMemoryDexClassLoader::new(env, &dex_buffer, &parent)?;
-        let dex_loader = JClassLoader::cast_local(env, dex_loader)?;
-
-        // Prime the cached class using that loader. Without this the default
-        // lookup searches only the platform and the app's own classes, and the
-        // shim lives in neither.
-        let loader = LoaderContext::Loader(&dex_loader);
+        let app_loader = super::android::app_class_loader(env, app)?;
+        let loader = LoaderContext::Loader(&app_loader);
         FrameworkWatcherAPI::get(env, &loader)?;
 
-        let activity_ref = env.new_local_ref(&activity)?;
-        let context = ContextForLoader::cast_local(env, activity_ref)?;
+        // See ON_FRAMEWORK_EVENT: the VM cannot resolve the implementation by
+        // symbol, because it does not know this `.so` is loaded at all.
+        let class = loader.load_class(
+            env,
+            jni::jni_str!("dev.okhsunrog.netdiag.NetdiagFrameworkWatcher"),
+            false,
+        )?;
+        // SAFETY: `native_method!` checks the signature against the Rust
+        // function at compile time, and this is the class that declares it.
+        unsafe { env.register_native_methods(&class, &[ON_FRAMEWORK_EVENT])? };
+
+        let activity = super::android::activity_object(env, app);
+        let context = WatcherContext::cast_local(env, activity)?;
         let watcher = FrameworkWatcher::new(env, &context)?;
         watcher.start(env)?;
 
         env.new_global_ref(&watcher)
     })?;
 
-    debug!("framework watcher installed ({} byte dex)", DEX_DATA.len());
+    debug!("framework watcher installed");
     Ok((rx, FrameworkWatcherHandle { watcher }))
 }
 

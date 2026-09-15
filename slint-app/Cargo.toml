@@ -23,7 +23,7 @@ path = "src/bin/desktop.rs"
 netdiag-ipc = { path = "../crates/netdiag-ipc" }
 anyhow = "1.0.104"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "process"] }
-tracing = "0.1.44"
+tracing = { version = "0.1.44", features = ["log"] }
 
 # Slint from master: this build uses FlexboxLayout and the per-item
 # cross-axis-self-alignment property, neither of which is in a release yet.
@@ -31,6 +31,7 @@ slint = { git = "https://github.com/slint-ui/slint", branch = "master", default-
     "compat-1-2",
     "std",
 ] }
+libc = "0.2.189"
 
 # The same UI runs on the desktop against a locally running daemon, which is
 # how it is iterated on without a phone attached.
@@ -48,13 +49,9 @@ slint = { git = "https://github.com/slint-ui/slint", branch = "master", default-
 jni = "0.22"
 android_logger = "0.15"
 log = "0.4"
-libc = "0.2.189"
 
 [build-dependencies]
 slint-build = { git = "https://github.com/slint-ui/slint", branch = "master" }
-# javac + d8 from the build script, for the one Java class this app needs.
-# Already in the tree as a transitive build-dep of Slint's Android backend.
-android-build = "0.1.4"
 
 [package.metadata.android]
 package = "dev.okhsunrog.netdiag.slint"
@@ -63,6 +60,10 @@ build_targets = ["aarch64-linux-android"]
 # the Compose build: the installer only extracts and marks executable the files
 # matching lib*.so.
 runtime_libs = "runtime-libs"
+# Compiled into the APK's own classes.dex. `ConnectivityManager.NetworkCallback`
+# has to be subclassed to receive anything and Rust cannot subclass a Java
+# abstract class, so this one directory is the app's entire Java surface.
+java_sources = ["java"]
 
 [package.metadata.android.sdk]
 min_sdk_version = 31
