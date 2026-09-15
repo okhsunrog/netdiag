@@ -182,6 +182,99 @@ mod tests {
         );
     }
 
+    /// The names the Java emits must be the names this side matches on.
+    #[test]
+    fn capability_names_match_the_java() {
+        let java = include_str!("../../java/NetdiagFramework.java");
+        for name in [
+            "INTERNET", "VALIDATED", "CAPTIVE_PORTAL", "NOT_RESTRICTED", "NOT_METERED",
+            "NOT_ROAMING", "NOT_CONGESTED", "NOT_SUSPENDED", "NOT_VPN", "TRUSTED", "FOREGROUND",
+        ] {
+            assert!(
+                java.contains(&format!("\"{name}\"")),
+                "NetdiagFramework no longer emits {name}, so this side would read it as false"
+            );
+            // And the SDK constant behind it is still named in the Java, which
+            // is what makes javac the thing checking it.
+            assert!(
+                java.contains(&format!("NET_CAPABILITY_{name}")),
+                "{name} is emitted without reference to its SDK constant"
+            );
+        }
+    }
+
+    #[test]
+    fn transport_names_match_the_java() {
+        let java = include_str!("../../java/NetdiagFramework.java");
+        for name in ["CELLULAR", "WIFI", "BLUETOOTH", "ETHERNET", "VPN", "USB"] {
+            assert!(
+                transport(name).is_some(),
+                "{name} has no wire mapping on the Rust side"
+            );
+            assert!(
+                java.contains(&format!("TRANSPORT_{name}")),
+                "NetdiagFramework no longer reports {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_a_framework_snapshot() {
+        let text = "V\t1\t34\t476741369856\t1\n\
+                    N\t476741369856\tWIFI,VPN\tINTERNET,VALIDATED,NOT_METERED\ttun0\t1280\t0\t\texample.com\t1.1.1.1,fd3f::1\n\
+                    N\t455266533376\tCELLULAR\tINTERNET\trmnet16\t1500\t1\tdns.example\t\t8.8.8.8\n";
+        let state = parse_framework_snapshot(text).expect("should parse");
+
+        assert_eq!(state.sdk_int, 34);
+        assert_eq!(state.active_net_id, 111);
+        assert!(state.has_active_network);
+        assert_eq!(state.networks.len(), 2);
+
+        let vpn = &state.networks[0];
+        assert!(vpn.is_default);
+        assert_eq!(
+            vpn.transports,
+            vec![proto::Transport::Wifi as i32, proto::Transport::Vpn as i32]
+        );
+        let caps = vpn.capabilities.as_ref().unwrap();
+        assert!(caps.validated && caps.internet && caps.not_metered);
+        assert!(!caps.not_vpn, "NOT_VPN was absent, so it must read as false");
+
+        let link = vpn.link_properties.as_ref().unwrap();
+        assert_eq!(link.interface_name, "tun0");
+        assert_eq!(link.mtu, 1280);
+        assert_eq!(link.domains, vec!["example.com"]);
+        // 1.1.1.1 as four bytes, fd3f::1 as sixteen.
+        assert_eq!(link.dns_servers.len(), 2);
+        assert_eq!(link.dns_servers[0].addr, vec![1, 1, 1, 1]);
+        assert_eq!(link.dns_servers[1].addr.len(), 16);
+
+        let cell = &state.networks[1];
+        assert!(!cell.is_default);
+        let cell_link = cell.link_properties.as_ref().unwrap();
+        assert_eq!(cell_link.private_dns_server_name, "dns.example");
+        assert_eq!(
+            cell_link.private_dns_mode,
+            proto::PrivateDnsMode::Strict as i32
+        );
+    }
+
+    #[test]
+    fn an_unknown_format_version_is_refused_rather_than_misread() {
+        // Better no framework state — the daemon reports SKIP — than a state
+        // parsed from a layout this build does not understand.
+        assert!(parse_framework_snapshot("V\t2\t34\t0\t0\n").is_none());
+    }
+
+    #[test]
+    fn a_link_local_dns_address_keeps_its_scope_out_of_the_bytes() {
+        let text = "V\t1\t34\t0\t0\nN\t4294967296\t\t\twlan0\t1500\t0\t\t\tfe80::1%wlan0\n";
+        let state = parse_framework_snapshot(text).expect("should parse");
+        let dns = &state.networks[0].link_properties.as_ref().unwrap().dns_servers;
+        assert_eq!(dns.len(), 1, "the scope must not make the address unparseable");
+        assert_eq!(dns[0].addr.len(), 16);
+    }
+
     #[test]
     fn parses_a_package_listing() {
         let apps = parse_packages("10400\t0\tcom.example.shop\tShop\n1000\t1\tandroid\tSystem\n");
@@ -224,4 +317,163 @@ mod tests {
         assert_eq!(apps.len(), 1);
         assert_eq!(apps[0].package, "com.b");
     }
+}
+
+// ---- The framework snapshot -------------------------------------------------
+
+/// Parse what `NetdiagFramework.collectNetworkSnapshot()` returns.
+///
+/// The format is one `V` header line and one `N` line per network, tab
+/// separated. Transports and capabilities arrive as the names the Java chose,
+/// never as SDK integers — that is the point of the facade: `javac` checks
+/// `NET_CAPABILITY_VALIDATED` against the real SDK, and this side only has to
+/// agree with a word.
+///
+/// Anything unparseable is skipped rather than failing the whole snapshot. A
+/// missing network degrades the report; a missing report makes the app useless
+/// exactly when something is wrong.
+pub fn parse_framework_snapshot(text: &str) -> Option<proto::AndroidNetworkState> {
+    /// Refuse a format this code does not know rather than misreading it.
+    const SUPPORTED_FORMAT: &str = "1";
+
+    let mut state = proto::AndroidNetworkState {
+        // The Java does not timestamp its own answer; this side is where the
+        // snapshot becomes a thing with a time on it.
+        captured_at_unix_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
+        ..Default::default()
+    };
+    let mut seen_header = false;
+
+    for line in text.lines() {
+        let mut fields = line.split('\t');
+        match fields.next() {
+            Some("V") => {
+                if fields.next() != Some(SUPPORTED_FORMAT) {
+                    return None;
+                }
+                state.sdk_int = fields.next()?.parse().ok()?;
+                let handle: u64 = fields.next()?.parse().ok()?;
+                state.active_network_handle = handle;
+                state.active_net_id = (handle >> 32) as i32;
+                state.has_active_network = handle != 0;
+                state.restrict_background_status = fields.next()?.parse().unwrap_or(0);
+                // RESTRICT_BACKGROUND_STATUS_ENABLED
+                state.data_saver_enabled = state.restrict_background_status == 3;
+                seen_header = true;
+            }
+            Some("N") => {
+                if let Some(network) = parse_network(fields, state.active_network_handle) {
+                    state.networks.push(network);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    seen_header.then_some(state)
+}
+
+fn parse_network<'a>(
+    mut fields: impl Iterator<Item = &'a str>,
+    active_handle: u64,
+) -> Option<proto::AndroidNetwork> {
+    let handle: u64 = fields.next()?.parse().ok()?;
+    let transports = fields.next().unwrap_or_default();
+    let capabilities = fields.next().unwrap_or_default();
+
+    let interface_name = fields.next().unwrap_or_default().to_owned();
+    let mtu: i32 = fields.next().unwrap_or("0").parse().unwrap_or(0);
+    let private_dns_active = fields.next().unwrap_or("0") == "1";
+    let private_dns_server_name = fields.next().unwrap_or_default().to_owned();
+    let domains = fields.next().unwrap_or_default();
+    let dns = fields.next().unwrap_or_default();
+
+    Some(proto::AndroidNetwork {
+        network_handle: handle,
+        net_id: (handle >> 32) as i32,
+        is_default: handle != 0 && handle == active_handle,
+        transports: transports
+            .split(',')
+            .filter_map(transport)
+            .map(|t| t as i32)
+            .collect(),
+        capabilities: Some(capabilities_from(capabilities)),
+        link_properties: Some(proto::LinkPropertiesInfo {
+            interface_name,
+            mtu,
+            private_dns_mode: if !private_dns_server_name.is_empty() {
+                proto::PrivateDnsMode::Strict as i32
+            } else if private_dns_active {
+                proto::PrivateDnsMode::Opportunistic as i32
+            } else {
+                proto::PrivateDnsMode::Off as i32
+            },
+            private_dns_server_name,
+            private_dns_active,
+            domains: domains
+                .split(' ')
+                .filter(|d| !d.is_empty())
+                .map(str::to_owned)
+                .collect(),
+            dns_servers: dns.split(',').filter_map(ip_address).collect(),
+            ..Default::default()
+        }),
+        ..Default::default()
+    })
+}
+
+fn transport(name: &str) -> Option<proto::Transport> {
+    use proto::Transport as T;
+    Some(match name {
+        "CELLULAR" => T::Cellular,
+        "WIFI" => T::Wifi,
+        "BLUETOOTH" => T::Bluetooth,
+        "ETHERNET" => T::Ethernet,
+        "VPN" => T::Vpn,
+        "USB" => T::Usb,
+        // WIFI_AWARE and LOWPAN have no wire value; they are reported by name
+        // so that adding one later is a change here and not in the Java.
+        _ => return None,
+    })
+}
+
+fn capabilities_from(list: &str) -> proto::NetworkCapabilitiesInfo {
+    let has = |name: &str| list.split(',').any(|entry| entry == name);
+    proto::NetworkCapabilitiesInfo {
+        internet: has("INTERNET"),
+        validated: has("VALIDATED"),
+        captive_portal: has("CAPTIVE_PORTAL"),
+        not_restricted: has("NOT_RESTRICTED"),
+        not_metered: has("NOT_METERED"),
+        not_roaming: has("NOT_ROAMING"),
+        not_congested: has("NOT_CONGESTED"),
+        not_suspended: has("NOT_SUSPENDED"),
+        not_vpn: has("NOT_VPN"),
+        trusted: has("TRUSTED"),
+        foreground: has("FOREGROUND"),
+        ..Default::default()
+    }
+}
+
+/// `InetAddress.getHostAddress()` back into the raw bytes the schema stores.
+///
+/// A link-local IPv6 address comes with a scope (`fe80::1%wlan0`), which no IP
+/// parser accepts, so it is trimmed first.
+fn ip_address(text: &str) -> Option<proto::IpAddress> {
+    let text = text.split('%').next()?.trim();
+    if text.is_empty() {
+        return None;
+    }
+    let parsed: std::net::IpAddr = text.parse().ok()?;
+    // The schema stores only the bytes; four of them means v4 and sixteen v6,
+    // so there is nothing else to record.
+    Some(proto::IpAddress {
+        addr: match parsed {
+            std::net::IpAddr::V4(v4) => v4.octets().to_vec(),
+            std::net::IpAddr::V6(v6) => v6.octets().to_vec(),
+        },
+    })
 }
