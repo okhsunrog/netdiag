@@ -1,0 +1,20 @@
+version: v2
+modules:
+  - path: .
+    name: buf.build/okhsunrog/netdiag
+lint:
+  use:
+    - STANDARD
+  except:
+    # We intentionally keep request/response messages for several RPCs in one
+    # file (service.proto) rather than one file per RPC.
+    - RPC_REQUEST_STANDARD_NAME
+    - RPC_RESPONSE_STANDARD_NAME
+    - RPC_REQUEST_RESPONSE_UNIQUE
+breaking:
+  use:
+    - FILE
+  except:
+    # Renaming a generated field's Rust/Kotlin identifier is not a wire break;
+    # we still avoid it, but it should not fail CI on its own.
+    - FIELD_SAME_NAME

@@ -1,0 +1,139 @@
+// Packet capture from a real interface via AF_PACKET.
+//
+// Deliberately not VpnService-based: Android only allows one active VpnService
+// at a time, and taking that slot would break the very VPN the user is trying
+// to debug. AF_PACKET with root sees the real wire, including traffic that
+// never enters a tun device.
+syntax = "proto3";
+
+package netdiag.v1;
+
+import "netdiag/v1/common.proto";
+
+option java_package = "dev.okhsunrog.netdiag.proto";
+option java_multiple_files = true;
+
+// A deliberately small, structured filter. It is applied in the daemon rather
+// than compiled to cBPF; captures here are short and low-volume, and this
+// avoids depending on libpcab/libpcap on device. The field layout leaves room
+// to add a `bpf_program` field later without breaking clients.
+message CaptureFilter {
+  repeated IpAddress hosts = 1;          // match src or dst
+  repeated uint32 ports = 2;             // match src or dst
+  repeated IpFamily families = 3;
+  bool tcp = 4;
+  bool udp = 5;
+  bool icmp = 6;
+  bool arp = 7;
+  // When set, only packets to/from this uid's sockets. Implemented by
+  // resolving the uid's current 4-tuples before the capture starts.
+  uint32 uid = 8;
+  bool has_uid = 9;
+  // Free-form pcap-filter text, reserved for a future cBPF compiler. Ignored
+  // by daemons that do not support it; they report that in CaptureStarted.
+  string bpf_expression = 10;
+}
+
+message StartCaptureRequest {
+  // Interface name; empty means "any" (captures on all interfaces).
+  string interface_name = 1;
+  CaptureFilter filter = 2;
+  // Bytes to keep per packet. 0 => 262144 (full frame).
+  uint32 snaplen = 3;
+  // Stop conditions; 0 means unlimited for that dimension.
+  uint32 max_packets = 4;
+  uint64 max_bytes = 5;
+  uint32 duration_ms = 6;
+  // Put the interface into promiscuous mode. Off by default: it is visible to
+  // other software on the device and changes what the NIC does.
+  bool promiscuous = 7;
+  // Include packet bytes in the stream. When false only metadata is sent,
+  // which is much cheaper for a long-running overview.
+  bool include_payload = 8;
+}
+
+// pcap link types.
+enum LinkType {
+  LINK_TYPE_UNSPECIFIED = 0;
+  LINK_TYPE_ETHERNET = 1;     // LINKTYPE_ETHERNET
+  LINK_TYPE_RAW = 101;        // LINKTYPE_RAW, raw IP, typical for rmnet/tun
+  LINK_TYPE_LINUX_SLL = 113;  // LINKTYPE_LINUX_SLL, used for the "any" device
+  LINK_TYPE_LINUX_SLL2 = 276;
+}
+
+message CaptureStarted {
+  uint64 capture_id = 1;
+  string interface_name = 2;
+  LinkType link_type = 3;
+  uint32 snaplen = 4;
+  int64 started_unix_ms = 5;
+  // True when `bpf_expression` was ignored.
+  bool bpf_expression_ignored = 6;
+  string note = 7;
+  // The 24-byte classic libpcap file header matching `link_type` and
+  // `snaplen`. The daemon already knows both, so it emits the header rather
+  // than leaving the client to reimplement the format and get the link type
+  // wrong on raw-IP interfaces. Write this, then one 16-byte record header
+  // (ts_sec, ts_usec, captured_len, original_len) per packet, then its bytes.
+  bytes pcap_file_header = 8;
+}
+
+// Lightweight L3/L4 decode done in the daemon so the list view does not have
+// to parse packets in Kotlin. The full bytes are still shipped when requested.
+message PacketSummary {
+  IpFamily family = 1;
+  IpAddress source = 2;
+  IpAddress destination = 3;
+  uint32 source_port = 4;
+  uint32 destination_port = 5;
+  uint32 ip_protocol = 6;
+  string protocol_name = 7;
+  uint32 ttl = 8;
+  // TCP flags, when protocol is TCP.
+  bool syn = 9;
+  bool ack = 10;
+  bool fin = 11;
+  bool rst = 12;
+  bool psh = 13;
+  uint32 tcp_seq = 14;
+  uint32 tcp_window = 15;
+  // ICMP type/code, when protocol is ICMP/ICMPv6. Type 3/4 (frag needed) and
+  // ICMPv6 type 2 (packet too big) are the MTU smoking guns.
+  uint32 icmp_type = 16;
+  uint32 icmp_code = 17;
+  uint32 icmp_mtu = 18;
+  string description = 19;
+}
+
+message CapturedPacket {
+  uint64 capture_id = 1;
+  uint64 sequence = 2;
+  int64 unix_ms = 3;
+  uint32 unix_us_fraction = 4;
+  // Length on the wire, which can exceed len(data) when snaplen truncated it.
+  uint32 original_length = 5;
+  bytes data = 6;
+  uint32 interface_index = 7;
+  string interface_name = 8;
+  bool outgoing = 9;
+  PacketSummary summary = 10;
+}
+
+message CaptureStats {
+  uint64 capture_id = 1;
+  uint64 packets_captured = 2;
+  uint64 packets_dropped_kernel = 3;
+  uint64 packets_filtered_out = 4;
+  uint64 bytes_captured = 5;
+}
+
+message StopCaptureRequest {
+  uint64 capture_id = 1;
+}
+
+message CaptureFinished {
+  uint64 capture_id = 1;
+  CaptureStats stats = 2;
+  string reason = 3;   // "stopped", "max_packets", "duration", "error"
+  Error error = 4;
+}

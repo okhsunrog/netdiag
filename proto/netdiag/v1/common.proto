@@ -1,0 +1,58 @@
+// Shared scalar-ish building blocks used across the netdiag API.
+//
+// Schema evolution rules for this package:
+//   * never renumber or reuse a field number; use `reserved` instead
+//   * never change a field's type in a wire-incompatible way
+//   * enums always carry a zero `_UNSPECIFIED` value and unknown values must be
+//     tolerated by clients (they render as the raw number)
+//   * new RPCs are added as new fields in the `oneof`s in service.proto
+syntax = "proto3";
+
+package netdiag.v1;
+
+option java_package = "dev.okhsunrog.netdiag.proto";
+option java_multiple_files = true;
+
+// An IPv4 or IPv6 address. The family is implied by the length of `addr`:
+// 4 bytes => IPv4, 16 bytes => IPv6. An empty `addr` means "unset".
+message IpAddress {
+  bytes addr = 1;
+}
+
+// An address with a prefix length, e.g. 192.168.1.10/24 or fe80::1/64.
+message IpPrefix {
+  IpAddress address = 1;
+  uint32 prefix_len = 2;
+}
+
+enum IpFamily {
+  IP_FAMILY_UNSPECIFIED = 0;
+  IP_FAMILY_V4 = 1;
+  IP_FAMILY_V6 = 2;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  // The request was malformed or referenced something that does not exist.
+  ERROR_CODE_INVALID_ARGUMENT = 1;
+  // The daemon understood the request but does not implement it.
+  ERROR_CODE_UNIMPLEMENTED = 2;
+  // A kernel interface (netlink, procfs, socket) returned an error.
+  ERROR_CODE_KERNEL = 3;
+  // The peer failed the SO_PEERCRED authorization check.
+  ERROR_CODE_PERMISSION_DENIED = 4;
+  // A subscription or capture id was not found / already finished.
+  ERROR_CODE_NOT_FOUND = 5;
+  // Resource exhausted: too many concurrent streams/captures.
+  ERROR_CODE_RESOURCE_EXHAUSTED = 6;
+  // Something went wrong inside the daemon.
+  ERROR_CODE_INTERNAL = 7;
+}
+
+message Error {
+  ErrorCode code = 1;
+  // Short, human readable, safe to show in the UI.
+  string message = 2;
+  // Optional low-level detail (errno text, netlink error, parse context).
+  string detail = 3;
+}

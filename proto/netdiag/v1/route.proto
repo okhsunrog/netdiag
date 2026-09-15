@@ -1,0 +1,182 @@
+// Routes, policy routing rules and the neighbour table, from NETLINK_ROUTE.
+//
+// Android leans very heavily on policy routing: every Network gets its own
+// routing table, and per-UID rules steer VPN and per-app traffic. Modelling
+// rules faithfully (including uid ranges and fwmark/mask) is what makes the
+// per-app correlation view possible.
+syntax = "proto3";
+
+package netdiag.v1;
+
+import "netdiag/v1/common.proto";
+
+option java_package = "dev.okhsunrog.netdiag.proto";
+option java_multiple_files = true;
+
+enum RouteProtocol {
+  ROUTE_PROTOCOL_UNSPECIFIED = 0;
+  ROUTE_PROTOCOL_REDIRECT = 1;
+  ROUTE_PROTOCOL_KERNEL = 2;
+  ROUTE_PROTOCOL_BOOT = 3;
+  ROUTE_PROTOCOL_STATIC = 4;
+  ROUTE_PROTOCOL_RA = 5;        // learned from a router advertisement
+  ROUTE_PROTOCOL_DHCP = 6;
+  ROUTE_PROTOCOL_OTHER = 7;
+}
+
+enum RouteScope {
+  ROUTE_SCOPE_UNSPECIFIED = 0;
+  ROUTE_SCOPE_UNIVERSE = 1;
+  ROUTE_SCOPE_SITE = 2;
+  ROUTE_SCOPE_LINK = 3;
+  ROUTE_SCOPE_HOST = 4;
+  ROUTE_SCOPE_NOWHERE = 5;
+}
+
+enum RouteType {
+  ROUTE_TYPE_UNSPECIFIED = 0;
+  ROUTE_TYPE_UNICAST = 1;
+  ROUTE_TYPE_LOCAL = 2;
+  ROUTE_TYPE_BROADCAST = 3;
+  ROUTE_TYPE_ANYCAST = 4;
+  ROUTE_TYPE_MULTICAST = 5;
+  ROUTE_TYPE_BLACKHOLE = 6;
+  ROUTE_TYPE_UNREACHABLE = 7;
+  ROUTE_TYPE_PROHIBIT = 8;
+  ROUTE_TYPE_THROW = 9;
+  ROUTE_TYPE_NAT = 10;
+}
+
+// One next hop. Single-path routes have exactly one; multipath routes have
+// several, each with a weight.
+message NextHop {
+  IpAddress gateway = 1;
+  uint32 out_interface_index = 2;
+  string out_interface_name = 3;
+  uint32 weight = 4;
+  uint32 flags = 5;
+}
+
+// Cached path metrics (RTAX_*). `mtu` here is the route MTU, which can be
+// lower than the interface MTU when PMTU discovery has kicked in.
+message RouteMetrics {
+  uint32 mtu = 1;
+  bool mtu_locked = 2;
+  uint32 advmss = 3;
+  uint32 window = 4;
+  uint32 hoplimit = 5;
+  uint32 initcwnd = 6;
+  uint32 initrwnd = 7;
+  uint32 rtt_ms = 8;
+}
+
+message Route {
+  IpFamily family = 1;
+  IpPrefix destination = 2;   // empty address + prefix_len 0 == default route
+  IpAddress preferred_source = 3;
+  // Routing table id. Android allocates one table per Network (usually equal
+  // to the netId, e.g. 101), plus fixed tables for local/main/default.
+  uint32 table = 4;
+  string table_name = 5;      // resolved via /data/misc/net or rt_tables if present
+  RouteProtocol protocol = 6;
+  uint32 protocol_raw = 7;
+  RouteScope scope = 8;
+  RouteType type = 9;
+  uint32 priority = 10;       // metric
+  repeated NextHop next_hops = 11;
+  RouteMetrics metrics = 12;
+  uint32 flags = 13;
+  // Expiry for RA-learned routes, seconds. 0 when not applicable.
+  uint32 expires_sec = 14;
+  // True when this is a default route (::/0 or 0.0.0.0/0).
+  bool is_default = 15;
+}
+
+// An `ip rule` entry: FIB rule from RTM_GETRULE.
+message RoutingRule {
+  IpFamily family = 1;
+  uint32 priority = 2;
+  // Selectors. All present selectors must match for the rule to fire.
+  IpPrefix source = 3;
+  IpPrefix destination = 4;
+  string input_interface = 5;
+  string output_interface = 6;
+  uint32 fwmark = 7;
+  uint32 fwmask = 8;
+  bool has_fwmark = 9;
+  // FRA_UID_RANGE: Android uses this for VPN and per-app network selection.
+  uint32 uid_range_start = 10;
+  uint32 uid_range_end = 11;
+  bool has_uid_range = 12;
+  uint32 tos = 13;
+  // Action.
+  uint32 table = 14;
+  string table_name = 15;
+  RuleAction action = 16;
+  uint32 suppress_prefix_len = 17;
+  bool has_suppress_prefix_len = 18;
+  uint32 suppress_interface_group = 19;
+  bool has_suppress_interface_group = 20;
+  bool invert = 21;
+  // Protocol that installed the rule (RTM_F_*/rtm_protocol), Android's netd
+  // uses RTPROT_STATIC.
+  uint32 protocol = 22;
+}
+
+enum RuleAction {
+  RULE_ACTION_UNSPECIFIED = 0;
+  RULE_ACTION_TO_TABLE = 1;
+  RULE_ACTION_GOTO = 2;
+  RULE_ACTION_NOP = 3;
+  RULE_ACTION_BLACKHOLE = 4;
+  RULE_ACTION_UNREACHABLE = 5;
+  RULE_ACTION_PROHIBIT = 6;
+}
+
+enum NeighborState {
+  NEIGHBOR_STATE_UNSPECIFIED = 0;
+  NEIGHBOR_STATE_INCOMPLETE = 1;
+  NEIGHBOR_STATE_REACHABLE = 2;
+  NEIGHBOR_STATE_STALE = 3;
+  NEIGHBOR_STATE_DELAY = 4;
+  NEIGHBOR_STATE_PROBE = 5;
+  NEIGHBOR_STATE_FAILED = 6;
+  NEIGHBOR_STATE_NOARP = 7;
+  NEIGHBOR_STATE_PERMANENT = 8;
+  NEIGHBOR_STATE_NONE = 9;
+}
+
+// ARP (IPv4) / NDP (IPv6) cache entry.
+message Neighbor {
+  IpFamily family = 1;
+  IpAddress address = 2;
+  bytes link_address = 3;
+  uint32 interface_index = 4;
+  string interface_name = 5;
+  NeighborState state = 6;
+  bool is_router = 7;
+  uint32 flags = 8;
+  // Milliseconds since this entry was last confirmed/updated, when the kernel
+  // reports NDA_CACHEINFO.
+  uint32 confirmed_ms = 9;
+  uint32 used_ms = 10;
+  uint32 updated_ms = 11;
+  uint32 probes = 12;
+}
+
+// The result of asking the kernel "where would this packet actually go?" via
+// RTM_GETROUTE with RTM_F_LOOKUP_TABLE. This runs the full policy-routing
+// pipeline (rules, uid ranges, fwmark) rather than guessing from a dump.
+message RouteLookup {
+  // Echo of what was asked.
+  IpAddress destination = 1;
+  IpAddress source_hint = 2;
+  uint32 uid = 3;
+  uint32 fwmark = 4;
+  uint32 out_interface_index = 5;
+  // The resolved route, or an error if the lookup failed (e.g. ENETUNREACH).
+  Route route = 6;
+  Error error = 7;
+  // Table the lookup landed in, as reported by the kernel.
+  uint32 table = 8;
+}

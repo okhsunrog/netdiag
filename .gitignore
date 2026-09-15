@@ -1,0 +1,35 @@
+# Rust
+/daemon/target/
+**/*.rs.bk
+
+# The daemon binary is a build artefact placed here by scripts/build-daemon.sh,
+# not something to commit.
+/android/app/src/main/jniLibs/
+
+# Gradle / Android
+.gradle/
+/android/.gradle/
+/android/build/
+/android/app/build/
+/android/local.properties
+/android/.kotlin/
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# Generated protobuf output
+/android/app/build/generated/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# Captures pulled off a device
+*.pcap
+*.pcapng
+
+# OS
+.DS_Store

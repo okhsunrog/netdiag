@@ -1,0 +1,148 @@
+// Network interfaces as seen by the Linux kernel (NETLINK_ROUTE / RTM_GETLINK,
+// RTM_GETADDR) plus the per-interface sysctls that matter for diagnosis.
+syntax = "proto3";
+
+package netdiag.v1;
+
+import "netdiag/v1/common.proto";
+
+option java_package = "dev.okhsunrog.netdiag.proto";
+option java_multiple_files = true;
+
+// IFF_* flags, exposed individually so clients never need the raw bitmask.
+message LinkFlags {
+  bool up = 1;
+  bool running = 2;
+  bool loopback = 3;
+  bool point_to_point = 4;
+  bool broadcast = 5;
+  bool multicast = 6;
+  bool no_arp = 7;
+  bool promisc = 8;
+  bool lower_up = 9;
+  bool dormant = 10;
+  // Raw value, for completeness and forward compatibility.
+  uint32 raw = 11;
+}
+
+// IF_OPER_* from RFC 2863.
+enum OperState {
+  OPER_STATE_UNSPECIFIED = 0;
+  OPER_STATE_UNKNOWN = 1;
+  OPER_STATE_NOT_PRESENT = 2;
+  OPER_STATE_DOWN = 3;
+  OPER_STATE_LOWER_LAYER_DOWN = 4;
+  OPER_STATE_TESTING = 5;
+  OPER_STATE_DORMANT = 6;
+  OPER_STATE_UP = 7;
+}
+
+// Best-effort classification, derived from ARPHRD type, kernel link kind and
+// Android's interface naming conventions (wlan*, rmnet*, ccmni*, tun*, v4-*).
+enum LinkKind {
+  LINK_KIND_UNSPECIFIED = 0;
+  LINK_KIND_LOOPBACK = 1;
+  LINK_KIND_WIFI = 2;
+  LINK_KIND_CELLULAR = 3;
+  LINK_KIND_ETHERNET = 4;
+  LINK_KIND_VPN_TUN = 5;
+  LINK_KIND_BLUETOOTH = 6;
+  LINK_KIND_CLAT = 7;      // 464XLAT translation interface, e.g. v4-rmnet0
+  LINK_KIND_BRIDGE = 8;
+  LINK_KIND_DUMMY = 9;
+  LINK_KIND_OTHER = 10;
+}
+
+message LinkStats {
+  uint64 rx_packets = 1;
+  uint64 tx_packets = 2;
+  uint64 rx_bytes = 3;
+  uint64 tx_bytes = 4;
+  uint64 rx_errors = 5;
+  uint64 tx_errors = 6;
+  uint64 rx_dropped = 7;
+  uint64 tx_dropped = 8;
+}
+
+// IFA_F_* address flags that change how an address behaves.
+message AddressFlags {
+  bool permanent = 1;
+  bool temporary = 2;   // RFC 4941 privacy address
+  bool deprecated = 3;
+  bool tentative = 4;   // DAD in progress
+  bool dadfailed = 5;
+  bool managed_temp = 6;
+  bool no_prefix_route = 7;
+  bool optimistic = 8;
+  bool home = 9;
+  bool stable_privacy = 10;
+  uint32 raw = 11;
+}
+
+enum AddressScope {
+  ADDRESS_SCOPE_UNSPECIFIED = 0;
+  ADDRESS_SCOPE_GLOBAL = 1;
+  ADDRESS_SCOPE_SITE = 2;
+  ADDRESS_SCOPE_LINK = 3;
+  ADDRESS_SCOPE_HOST = 4;
+  ADDRESS_SCOPE_NOWHERE = 5;
+}
+
+message LinkAddress {
+  IpPrefix prefix = 1;
+  AddressScope scope = 2;
+  AddressFlags flags = 3;
+  // Lifetimes in seconds; 0xffffffff means infinite. Only meaningful for IPv6
+  // addresses learned from router advertisements.
+  uint32 valid_lifetime_sec = 4;
+  uint32 preferred_lifetime_sec = 5;
+  string label = 6;
+  IpAddress broadcast = 7;
+}
+
+// The subset of /proc/sys/net/{ipv4,ipv6}/conf/<if>/* that actually explains
+// IPv6 behaviour on a device.
+message InterfaceSysctls {
+  bool ipv6_disabled = 1;          // disable_ipv6
+  int32 accept_ra = 2;
+  int32 accept_ra_defrtr = 3;
+  int32 accept_ra_rt_info_max_plen = 4;
+  int32 autoconf = 5;
+  int32 use_tempaddr = 6;
+  int32 forwarding_v4 = 7;
+  int32 forwarding_v6 = 8;
+  int32 rp_filter = 9;
+  int32 arp_ignore = 10;
+  int32 dad_transmits = 11;
+  int32 mtu_v6 = 12;               // ipv6/conf/<if>/mtu
+  int32 hop_limit = 13;
+}
+
+message Interface {
+  uint32 index = 1;
+  string name = 2;
+  string alias = 3;
+  LinkKind kind = 4;
+  // Kernel link type string from IFLA_INFO_KIND ("tun", "bridge", ...), empty
+  // for plain hardware devices.
+  string link_type = 5;
+  LinkFlags flags = 6;
+  OperState oper_state = 7;
+  uint32 mtu = 8;
+  // Hardware address, usually 6 bytes. Empty for tun/loopback.
+  bytes mac_address = 9;
+  bytes broadcast_address = 10;
+  uint32 tx_queue_len = 11;
+  string qdisc = 12;
+  // Index of the parent/lower device (IFLA_LINK), 0 when absent.
+  uint32 link_index = 13;
+  // Network namespace id (IFLA_LINK_NETNSID), -1 when in the current netns.
+  int32 netns_id = 14;
+  uint32 group = 15;
+  LinkStats stats = 16;
+  repeated LinkAddress addresses = 17;
+  InterfaceSysctls sysctls = 18;
+  // IFLA_XDP presence and IFLA_MASTER, useful when something odd is attached.
+  uint32 master_index = 19;
+  bool has_xdp = 20;
+}

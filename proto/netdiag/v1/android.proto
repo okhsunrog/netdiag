@@ -1,0 +1,156 @@
+// Android framework networking state.
+//
+// Unlike every other message in this package, these are produced by the *app*
+// (from ConnectivityManager / NetworkCapabilities / LinkProperties) and sent
+// *to* the daemon, so that the diagnosis engine can compare what the framework
+// believes with what the kernel actually has. That comparison is the whole
+// point of the tool, so the framework view has to cross the socket too.
+syntax = "proto3";
+
+package netdiag.v1;
+
+import "netdiag/v1/common.proto";
+
+option java_package = "dev.okhsunrog.netdiag.proto";
+option java_multiple_files = true;
+
+enum Transport {
+  TRANSPORT_UNSPECIFIED = 0;
+  TRANSPORT_CELLULAR = 1;
+  TRANSPORT_WIFI = 2;
+  TRANSPORT_BLUETOOTH = 3;
+  TRANSPORT_ETHERNET = 4;
+  TRANSPORT_VPN = 5;
+  TRANSPORT_WIFI_AWARE = 6;
+  TRANSPORT_LOWPAN = 7;
+  TRANSPORT_USB = 8;
+  TRANSPORT_THREAD = 9;
+  TRANSPORT_SATELLITE = 10;
+}
+
+enum PrivateDnsMode {
+  PRIVATE_DNS_MODE_UNSPECIFIED = 0;
+  PRIVATE_DNS_MODE_OFF = 1;
+  PRIVATE_DNS_MODE_OPPORTUNISTIC = 2;
+  PRIVATE_DNS_MODE_STRICT = 3;
+}
+
+// Mirrors NetworkCapabilities.NET_CAPABILITY_*; only the ones that matter for
+// diagnosis, plus the raw list for anything new the platform adds.
+message NetworkCapabilitiesInfo {
+  bool internet = 1;
+  bool validated = 2;
+  bool captive_portal = 3;
+  bool not_restricted = 4;
+  bool not_metered = 5;
+  bool not_roaming = 6;
+  bool not_congested = 7;
+  bool not_suspended = 8;
+  bool not_vpn = 9;
+  bool temporarily_not_metered = 10;
+  bool partial_connectivity = 11;
+  bool trusted = 12;
+  bool foreground = 13;
+  int32 link_downstream_bandwidth_kbps = 14;
+  int32 link_upstream_bandwidth_kbps = 15;
+  int32 signal_strength = 16;
+  // Raw NET_CAPABILITY_* integers, for forward compatibility.
+  repeated int32 raw_capabilities = 17;
+  // UIDs this network is administered by / owned by, when visible.
+  repeated int32 administrator_uids = 18;
+  int32 owner_uid = 19;
+  // Non-null only for VPN networks: the set of UIDs routed into the VPN.
+  repeated UidRange vpn_uid_ranges = 20;
+  string ssid = 21;
+  string network_specifier = 22;
+  int32 subscription_id = 23;
+  bool not_bandwidth_constrained = 24;
+}
+
+message UidRange {
+  int32 start = 1;
+  int32 stop = 2;
+}
+
+// A route as reported by LinkProperties.getRoutes(). Android hides a lot here
+// (no table, no metric), which is exactly why we cross-check against netlink.
+message AndroidRoute {
+  IpPrefix destination = 1;
+  IpAddress gateway = 2;
+  string interface_name = 3;
+  bool is_default = 4;
+  int32 type = 5;           // RouteInfo.RTN_*
+  int32 mtu = 6;
+}
+
+message LinkPropertiesInfo {
+  string interface_name = 1;
+  repeated IpPrefix link_addresses = 2;
+  repeated IpAddress dns_servers = 3;
+  repeated string domains = 4;
+  repeated AndroidRoute routes = 5;
+  int32 mtu = 6;
+  // Private DNS.
+  PrivateDnsMode private_dns_mode = 7;
+  string private_dns_server_name = 8;
+  bool private_dns_active = 9;
+  repeated IpAddress validated_private_dns_servers = 10;
+  // NAT64 / 464XLAT.
+  IpPrefix nat64_prefix = 11;
+  // Proxy.
+  bool has_http_proxy = 12;
+  string http_proxy_host = 13;
+  int32 http_proxy_port = 14;
+  string http_proxy_pac_url = 15;
+  string http_proxy_exclusions = 16;
+  // Stacked links, e.g. the v4-* clat interface hanging off a v6-only network.
+  repeated LinkPropertiesInfo stacked_links = 17;
+  string captive_portal_api_url = 18;
+  bool wake_on_lan_supported = 19;
+}
+
+// One Network object from ConnectivityManager.
+message AndroidNetwork {
+  // Network.getNetworkHandle(); stable across the process lifetime.
+  uint64 network_handle = 1;
+  // The netId, i.e. the low bits of the handle. This is the number that shows
+  // up in routing tables and fwmarks, so it is the join key with the kernel.
+  int32 net_id = 2;
+  repeated Transport transports = 3;
+  NetworkCapabilitiesInfo capabilities = 4;
+  LinkPropertiesInfo link_properties = 5;
+  bool is_default = 6;
+  // ConnectivityManager.getNetworkInfo() derived state, best effort.
+  string detailed_state = 7;
+  bool blocked_for_caller = 8;
+}
+
+// The complete framework-side picture at one instant.
+message AndroidNetworkState {
+  int64 captured_at_unix_ms = 1;
+  repeated AndroidNetwork networks = 2;
+  // Handle of ConnectivityManager.getActiveNetwork(), 0 if none.
+  uint64 active_network_handle = 3;
+  int32 active_net_id = 4;
+  bool has_active_network = 5;
+  // getRestrictBackgroundStatus(): 1 disabled, 2 whitelisted, 3 enabled.
+  int32 restrict_background_status = 6;
+  bool airplane_mode = 7;
+  bool wifi_enabled = 8;
+  bool data_saver_enabled = 9;
+  // Global private DNS setting (Settings.Global.private_dns_mode).
+  PrivateDnsMode global_private_dns_mode = 10;
+  string global_private_dns_specifier = 11;
+  int32 sdk_int = 12;
+  string device_model = 13;
+  string build_fingerprint = 14;
+}
+
+// Identifies an installed app for the correlation view. The app resolves
+// package -> uid via PackageManager; the daemon only ever works with the uid.
+message AppRef {
+  string package_name = 1;
+  uint32 uid = 2;
+  string label = 3;
+  bool is_system = 4;
+}

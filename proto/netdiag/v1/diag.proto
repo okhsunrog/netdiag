@@ -1,0 +1,249 @@
+// The diagnosis engine: a fixed list of checks, each with a machine-readable
+// id, plus rule-derived findings that interpret combinations of check results.
+//
+// Checks are facts ("IPv6 TCP handshake to 2606:4700:4700::1111:443 failed,
+// ETIMEDOUT after 3s"). Findings are interpretations ("upstream IPv6 is
+// blackholed; apps will stall on Happy Eyeballs before falling back").
+syntax = "proto3";
+
+package netdiag.v1;
+
+import "netdiag/v1/common.proto";
+import "netdiag/v1/route.proto";
+import "netdiag/v1/socket.proto";
+import "netdiag/v1/android.proto";
+
+option java_package = "dev.okhsunrog.netdiag.proto";
+option java_multiple_files = true;
+
+enum CheckStatus {
+  CHECK_STATUS_UNSPECIFIED = 0;
+  CHECK_STATUS_PASS = 1;
+  CHECK_STATUS_FAIL = 2;
+  CHECK_STATUS_WARN = 3;
+  // Not applicable / preconditions missing (e.g. no IPv6 address at all, so
+  // the IPv6 TCP check cannot say anything).
+  CHECK_STATUS_SKIP = 4;
+  // Informational: reports a value without judging it.
+  CHECK_STATUS_INFO = 5;
+  CHECK_STATUS_RUNNING = 6;
+}
+
+// Stable identifiers. Adding a new check means adding a new enum value; old
+// clients render it by its `title` string, so the enum is only for logic.
+enum CheckId {
+  CHECK_ID_UNSPECIFIED = 0;
+  CHECK_ID_ANDROID_NETWORK_STATE = 1;
+  CHECK_ID_ACTIVE_INTERFACE = 2;
+  CHECK_ID_IPV4_ADDRESS = 3;
+  CHECK_ID_IPV6_ADDRESS = 4;
+  CHECK_ID_IPV4_DEFAULT_ROUTE = 5;
+  CHECK_ID_IPV6_DEFAULT_ROUTE = 6;
+  CHECK_ID_GATEWAY_REACHABILITY_V4 = 7;
+  CHECK_ID_GATEWAY_REACHABILITY_V6 = 8;
+  CHECK_ID_DNS_A = 9;
+  CHECK_ID_DNS_AAAA = 10;
+  CHECK_ID_TCP_V4 = 11;
+  CHECK_ID_TCP_V6 = 12;
+  CHECK_ID_TLS_HANDSHAKE = 13;
+  CHECK_ID_PRIVATE_DNS = 14;
+  CHECK_ID_NAT64_DNS64 = 15;
+  CHECK_ID_VPN_ROUTING = 16;
+  CHECK_ID_FIREWALL_ANOMALY = 17;
+  CHECK_ID_MTU_PMTU = 18;
+  CHECK_ID_SUSPICIOUS_TCP_STATES = 19;
+  CHECK_ID_FRAMEWORK_KERNEL_AGREEMENT = 20;
+  CHECK_ID_ROUTING_RULE_COVERAGE = 21;
+  CHECK_ID_DNS_LATENCY = 22;
+  CHECK_ID_CAPTIVE_PORTAL = 23;
+  CHECK_ID_ROUTE_LOOKUP_V4 = 24;
+  CHECK_ID_ROUTE_LOOKUP_V6 = 25;
+}
+
+// One executed check. `evidence` holds structured key/value detail that the UI
+// shows when a row is expanded, so checks stay readable without a bespoke
+// message type per check.
+message Check {
+  CheckId id = 1;
+  // Dotted string form of the id, stable, used when the enum is unknown to an
+  // older client, e.g. "tcp.v6".
+  string key = 2;
+  string title = 3;
+  CheckStatus status = 4;
+  // One line, already phrased for humans.
+  string detail = 5;
+  uint64 duration_ms = 6;
+  map<string, string> evidence = 7;
+  // Which family this check concerns, if any. Lets the UI group v4/v6 columns.
+  IpFamily family = 8;
+  // Populated when the check failed because of an OS error.
+  Error error = 9;
+  // Checks this one depended on; used to explain SKIPs.
+  repeated string depends_on = 10;
+}
+
+enum FindingSeverity {
+  FINDING_SEVERITY_UNSPECIFIED = 0;
+  FINDING_SEVERITY_INFO = 1;
+  FINDING_SEVERITY_LOW = 2;
+  FINDING_SEVERITY_MEDIUM = 3;
+  FINDING_SEVERITY_HIGH = 4;
+  FINDING_SEVERITY_CRITICAL = 5;
+}
+
+// Stable rule identifiers for the interpretation layer.
+enum FindingId {
+  FINDING_ID_UNSPECIFIED = 0;
+  FINDING_ID_BROKEN_UPSTREAM_IPV6 = 1;
+  FINDING_ID_IPV6_CONFIGURED_NO_ROUTE = 2;
+  FINDING_ID_NO_CONNECTIVITY_AT_ALL = 3;
+  FINDING_ID_DNS_BROKEN_TRANSPORT_OK = 4;
+  FINDING_ID_PRIVATE_DNS_BLOCKING = 5;
+  FINDING_ID_CAPTIVE_PORTAL = 6;
+  FINDING_ID_VPN_LEAK = 7;
+  FINDING_ID_VPN_BLACKHOLE = 8;
+  FINDING_ID_FRAMEWORK_KERNEL_DISAGREEMENT = 9;
+  FINDING_ID_VALIDATED_BUT_BROKEN = 10;
+  FINDING_ID_MTU_BLACKHOLE = 11;
+  FINDING_ID_GATEWAY_UNREACHABLE = 12;
+  FINDING_ID_NAT64_WITHOUT_CLAT = 13;
+  FINDING_ID_CLAT_WITHOUT_NAT64 = 14;
+  FINDING_ID_FIREWALL_BLOCKING_UID = 15;
+  FINDING_ID_SOCKETS_STUCK_SYN_SENT = 16;
+  FINDING_ID_SOCKETS_STUCK_CLOSE_WAIT = 17;
+  FINDING_ID_METERED_RESTRICTION = 18;
+  FINDING_ID_NO_UID_RULE_MATCH = 19;
+  FINDING_ID_MULTIPLE_DEFAULT_ROUTES = 20;
+  FINDING_ID_IPV6_DISABLED_BY_SYSCTL = 21;
+  FINDING_ID_HAPPY_EYEBALLS_DELAY = 22;
+}
+
+message Finding {
+  FindingId id = 1;
+  string key = 2;
+  FindingSeverity severity = 3;
+  // "Suspected problem: broken upstream IPv6"
+  string title = 4;
+  // Multi-paragraph plain-language explanation of what the evidence means.
+  string interpretation = 5;
+  // Keys of the checks that triggered this rule, in display order.
+  repeated string supporting_checks = 6;
+  // Concrete things the user can try. Not commands to run automatically.
+  repeated string suggested_actions = 7;
+  // 0..100, how strongly the rule fired. Rules with partial evidence report
+  // lower confidence rather than staying silent.
+  uint32 confidence = 8;
+}
+
+// What to diagnose. All fields optional; the daemon picks sane defaults.
+message DiagnoseTarget {
+  // Hostname for the DNS checks. Default: a well-known dual-stack host.
+  string hostname = 1;
+  // Literal endpoints for the TCP checks; when empty the daemon uses the
+  // addresses resolved for `hostname`, falling back to fixed anycast resolvers.
+  IpAddress ipv4_endpoint = 2;
+  IpAddress ipv6_endpoint = 3;
+  uint32 tcp_port = 4;
+  // Run the probes as if they were this UID (SO_MARK + uid-aware route lookup).
+  uint32 as_uid = 5;
+  bool has_as_uid = 6;
+  // Pin probes to this Android netId (sets the fwmark accordingly). 0 = default
+  // network.
+  int32 net_id = 7;
+  // Per-probe timeout; 0 => daemon default (3000 ms).
+  uint32 timeout_ms = 8;
+}
+
+message DiagnoseRequest {
+  DiagnoseTarget target = 1;
+  // The framework's view, captured by the app immediately before the call.
+  // Without it the framework/kernel agreement checks are skipped.
+  AndroidNetworkState android_state = 2;
+  // Skip active network probes and only evaluate collected state. Useful on a
+  // metered connection or when the user only wants a structural check.
+  bool passive_only = 3;
+  // Subset of checks to run; empty means all.
+  repeated CheckId only = 4;
+  repeated CheckId skip = 5;
+}
+
+message DiagnoseResponse {
+  int64 started_unix_ms = 1;
+  uint64 total_duration_ms = 2;
+  repeated Check checks = 3;
+  repeated Finding findings = 4;
+  // One-line verdict for the top of the screen.
+  string summary = 5;
+  // Worst severity among findings, for colouring the summary.
+  FindingSeverity worst_severity = 6;
+  uint32 passed = 7;
+  uint32 failed = 8;
+  uint32 warned = 9;
+  uint32 skipped = 10;
+}
+
+// Streaming variant: the same checks, emitted as they complete, so a slow
+// probe does not block the whole report. The final message carries `response`.
+message DiagnoseProgress {
+  oneof payload {
+    Check check = 1;
+    DiagnoseResponse response = 2;
+  }
+}
+
+// ---- Per-app correlation ----------------------------------------------------
+
+// How a UID's traffic is expected to be routed, derived from the policy rules
+// plus a kernel route lookup done as that UID.
+message UidRoutingPath {
+  uint32 uid = 1;
+  // Rules that match this uid, in priority order, both families.
+  repeated RoutingRule matching_rules = 2;
+  // What the kernel says when asked to route a packet for this uid.
+  RouteLookup lookup_v4 = 3;
+  RouteLookup lookup_v6 = 4;
+  // Resolved egress interface names.
+  string egress_interface_v4 = 5;
+  string egress_interface_v6 = 6;
+  // Table ids the lookups landed in.
+  uint32 table_v4 = 7;
+  uint32 table_v6 = 8;
+}
+
+message VpnAssessment {
+  bool vpn_present = 1;
+  string vpn_interface = 2;
+  int32 vpn_net_id = 3;
+  // True when the app's traffic goes through the VPN interface.
+  bool app_uses_vpn = 4;
+  // True when a uid rule explicitly excludes this app from the VPN.
+  bool app_bypasses_vpn = 5;
+  string bypass_reason = 6;
+  // The framework's own view: is this uid inside NetworkCapabilities' VPN uid
+  // ranges?
+  bool framework_says_in_vpn = 7;
+  // Set when framework and kernel disagree about the previous two.
+  bool disagreement = 8;
+  // VPN routes only a subset of the address space (split tunnel).
+  bool split_tunnel = 9;
+  bool ipv6_inside_vpn = 10;
+}
+
+message AppNetworkState {
+  AppRef app = 1;
+  // The Android Network the app would use by default, if determinable.
+  AndroidNetwork android_network = 2;
+  UidRoutingPath routing = 3;
+  repeated Socket sockets = 4;
+  SocketSummary socket_summary = 5;
+  VpnAssessment vpn = 6;
+  // Firewall/eBPF blocking state for this uid, when readable.
+  string firewall_note = 7;
+  // Net ids observed on the app's actual sockets (from SO_MARK), which can
+  // differ from the default network if the app pins to a Network explicitly.
+  repeated int32 observed_net_ids = 8;
+  // Quick verdicts for the summary card.
+  bool ipv4_path_ok = 9;
+  bool ipv6_path_ok = 10;
+  string summary = 11;
+}

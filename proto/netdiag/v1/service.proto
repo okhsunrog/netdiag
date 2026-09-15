@@ -1,0 +1,310 @@
+// The wire protocol between the Compose app and the root daemon.
+//
+// Transport: Unix SOCK_STREAM. Framing: protobuf length-delimited, i.e. each
+// frame is a varint byte count followed by that many bytes of a serialized
+// ClientFrame / ServerFrame. That is the same framing prost's
+// `encode_length_delimited` and Java's `parseDelimitedFrom` already speak, so
+// neither side hand-rolls a header.
+//
+// There is no gRPC here on purpose: one process talks to one daemon over one
+// socket, and a 200-line dispatcher is easier to audit for something running
+// as root than a full HTTP/2 stack.
+//
+// Call model
+// ----------
+//   unary:        client sends ClientFrame{id=N, <request>}
+//                 daemon replies ServerFrame{id=N, <response>} — exactly one
+//   streaming:    client sends ClientFrame{id=N, <watch/capture request>}
+//                 daemon replies ServerFrame{id=N, ...} zero or more times,
+//                 then exactly one ServerFrame{id=N, stream_end}
+//   cancel:       client sends ClientFrame{id=M, cancel{target_id=N}}
+//                 daemon finishes stream N with stream_end and acks M
+//   errors:       ServerFrame{id=N, error} terminates call N
+//
+// `id` is client-assigned, must be non-zero, and must be unique among that
+// client's in-flight calls. Ids may be reused after a call completes.
+syntax = "proto3";
+
+package netdiag.v1;
+
+import "netdiag/v1/common.proto";
+import "netdiag/v1/link.proto";
+import "netdiag/v1/route.proto";
+import "netdiag/v1/socket.proto";
+import "netdiag/v1/system.proto";
+import "netdiag/v1/android.proto";
+import "netdiag/v1/event.proto";
+import "netdiag/v1/diag.proto";
+import "netdiag/v1/capture.proto";
+
+option java_package = "dev.okhsunrog.netdiag.proto";
+option java_multiple_files = true;
+
+// ---- Handshake --------------------------------------------------------------
+
+message HelloRequest {
+  // Highest protocol version the client understands.
+  uint32 protocol_version = 1;
+  string client_name = 2;
+  string client_version = 3;
+}
+
+message DaemonCapabilities {
+  bool netlink_route = 1;
+  bool inet_diag = 2;
+  bool route_lookup = 3;        // RTM_GETROUTE with RTM_F_LOOKUP_TABLE
+  bool packet_capture = 4;
+  bool bpf_maps = 5;
+  bool nftables = 6;
+  bool iptables = 7;
+  bool tc = 8;
+  bool raw_icmp = 9;
+  bool so_mark = 10;
+}
+
+message HelloResponse {
+  // Version the daemon will speak; always <= the client's request.
+  uint32 protocol_version = 1;
+  string daemon_version = 2;
+  string kernel_release = 3;
+  uint32 daemon_uid = 4;
+  uint32 daemon_pid = 5;
+  DaemonCapabilities capabilities = 6;
+  // Non-fatal problems found at startup, e.g. "inet_diag unavailable".
+  repeated string warnings = 7;
+  int64 daemon_started_unix_ms = 8;
+}
+
+// ---- Collection RPCs --------------------------------------------------------
+
+message GetInterfacesRequest {
+  // Restrict to these names/indexes; empty means all.
+  repeated string names = 1;
+  repeated uint32 indexes = 2;
+  bool include_stats = 3;
+  bool include_sysctls = 4;
+}
+
+message GetInterfacesResponse {
+  repeated Interface interfaces = 1;
+}
+
+message GetRoutesRequest {
+  IpFamily family = 1;          // UNSPECIFIED means both
+  // 0 means every table.
+  uint32 table = 2;
+  bool only_default = 3;
+  uint32 interface_index = 4;
+}
+
+message GetRoutesResponse {
+  repeated Route routes = 1;
+  // Table id -> human name, for the tables that appear in `routes`.
+  map<uint32, string> table_names = 2;
+}
+
+message GetRoutingRulesRequest {
+  IpFamily family = 1;
+  // When set, only rules whose selectors can match this uid.
+  uint32 uid = 2;
+  bool has_uid = 3;
+}
+
+message GetRoutingRulesResponse {
+  repeated RoutingRule rules = 1;
+}
+
+message GetNeighborsRequest {
+  IpFamily family = 1;
+  uint32 interface_index = 2;
+  bool only_routers = 3;
+}
+
+message GetNeighborsResponse {
+  repeated Neighbor neighbors = 1;
+}
+
+message GetSocketsRequest {
+  SocketFilter filter = 1;
+}
+
+message GetSocketsResponse {
+  repeated Socket sockets = 1;
+  SocketSummary summary = 2;
+  bool truncated = 3;
+}
+
+// A single consistent-ish capture of everything, for the overview screen.
+message GetSnapshotRequest {
+  bool include_sockets = 1;
+  bool include_socket_tcp_info = 2;
+  bool include_neighbors = 3;
+  bool include_firewall = 4;
+  bool include_qdiscs = 5;
+  bool include_counters = 6;
+  bool include_sysctls = 7;
+  // The framework's view, so the snapshot can be stored and later re-analysed
+  // as one self-contained object (also what report export writes out).
+  AndroidNetworkState android_state = 8;
+}
+
+message Snapshot {
+  int64 captured_at_unix_ms = 1;
+  string kernel_release = 2;
+  repeated Interface interfaces = 3;
+  repeated Route routes = 4;
+  repeated RoutingRule rules = 5;
+  repeated Neighbor neighbors = 6;
+  repeated Socket sockets = 7;
+  SocketSummary socket_summary = 8;
+  GlobalSysctls sysctls = 9;
+  ProtocolCounters counters = 10;
+  FirewallState firewall = 11;
+  repeated Qdisc qdiscs = 12;
+  repeated NetworkNamespace namespaces = 13;
+  ResolverState resolver = 14;
+  Clat464State clat = 15;
+  map<uint32, string> table_names = 16;
+  AndroidNetworkState android_state = 17;
+  // How long collection took and anything that failed partway.
+  uint64 collection_duration_ms = 18;
+  repeated string collection_warnings = 19;
+}
+
+message GetSnapshotResponse {
+  Snapshot snapshot = 1;
+}
+
+message GetAppNetworkStateRequest {
+  AppRef app = 1;
+  AndroidNetworkState android_state = 2;
+  bool include_tcp_info = 3;
+  // Also run a kernel route lookup as this uid (cheap, on by default).
+  bool skip_route_lookup = 4;
+}
+
+message GetAppNetworkStateResponse {
+  AppNetworkState state = 1;
+}
+
+// Direct access to the kernel's policy-routing decision, which is what `ip
+// route get` does. Exposed on its own because it is the single most useful
+// primitive for "why did this packet go there".
+message RouteLookupRequest {
+  IpAddress destination = 1;
+  IpAddress source_hint = 2;
+  uint32 uid = 3;
+  bool has_uid = 4;
+  uint32 fwmark = 5;
+  bool has_fwmark = 6;
+  uint32 out_interface_index = 7;
+}
+
+message RouteLookupResponse {
+  RouteLookup lookup = 1;
+}
+
+// ---- Subscriptions ----------------------------------------------------------
+
+message WatchNetworkRequest {
+  EventFilter filter = 1;
+  // Emit one synthetic snapshot-derived batch of "current state" events first,
+  // so the timeline starts populated instead of empty.
+  bool replay_initial_state = 2;
+}
+
+message WatchRoutesRequest {
+  IpFamily family = 1;
+  uint32 table = 2;
+  bool include_rules = 3;
+}
+
+message WatchSocketsRequest {
+  SocketFilter filter = 1;
+  uint32 poll_ms = 2;
+}
+
+// The app forwards its ConnectivityManager callbacks here so the daemon can
+// merge them into the same timeline and use them in live diagnosis.
+message PushFrameworkEventRequest {
+  repeated NetworkEvent events = 1;
+  // Latest full framework state, if the app has one handy.
+  AndroidNetworkState android_state = 2;
+}
+
+message PushFrameworkEventResponse {
+  uint64 accepted = 1;
+}
+
+message CancelRequest {
+  uint64 target_id = 1;
+}
+
+message CancelResponse {
+  bool was_active = 1;
+}
+
+// Sent exactly once as the last frame of any streaming call.
+message StreamEnd {
+  // Set when the stream ended because of an error rather than normally.
+  Error error = 1;
+  string reason = 2;
+  uint64 items_sent = 3;
+}
+
+// ---- Frames -----------------------------------------------------------------
+
+message ClientFrame {
+  uint64 id = 1;
+
+  oneof body {
+    HelloRequest hello = 2;
+    GetSnapshotRequest get_snapshot = 3;
+    GetInterfacesRequest get_interfaces = 4;
+    GetRoutesRequest get_routes = 5;
+    GetRoutingRulesRequest get_routing_rules = 6;
+    GetNeighborsRequest get_neighbors = 7;
+    GetSocketsRequest get_sockets = 8;
+    GetAppNetworkStateRequest get_app_network_state = 9;
+    RouteLookupRequest route_lookup = 10;
+    DiagnoseRequest diagnose = 11;
+    WatchNetworkRequest watch_network = 12;
+    WatchRoutesRequest watch_routes = 13;
+    WatchSocketsRequest watch_sockets = 14;
+    StartCaptureRequest start_capture = 15;
+    StopCaptureRequest stop_capture = 16;
+    PushFrameworkEventRequest push_framework_event = 17;
+    CancelRequest cancel = 18;
+  }
+
+  // 19-49 reserved for future unary/streaming calls.
+  reserved 19 to 49;
+}
+
+message ServerFrame {
+  uint64 id = 1;
+
+  oneof body {
+    Error error = 2;
+    HelloResponse hello = 3;
+    GetSnapshotResponse get_snapshot = 4;
+    GetInterfacesResponse get_interfaces = 5;
+    GetRoutesResponse get_routes = 6;
+    GetRoutingRulesResponse get_routing_rules = 7;
+    GetNeighborsResponse get_neighbors = 8;
+    GetSocketsResponse get_sockets = 9;
+    GetAppNetworkStateResponse get_app_network_state = 10;
+    RouteLookupResponse route_lookup = 11;
+    DiagnoseProgress diagnose = 12;
+    NetworkEvent event = 13;
+    CaptureStarted capture_started = 14;
+    CapturedPacket packet = 15;
+    CaptureStats capture_stats = 16;
+    CaptureFinished capture_finished = 17;
+    PushFrameworkEventResponse push_framework_event = 18;
+    CancelResponse cancel = 19;
+    StreamEnd stream_end = 20;
+  }
+
+  reserved 21 to 49;
+}

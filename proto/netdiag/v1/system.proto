@@ -1,0 +1,144 @@
+// Kernel-wide networking state that is not per-interface: global sysctls,
+// netfilter/eBPF firewall surface, qdiscs, network namespaces and the resolver
+// configuration the kernel side can see.
+syntax = "proto3";
+
+package netdiag.v1;
+
+import "netdiag/v1/common.proto";
+
+option java_package = "dev.okhsunrog.netdiag.proto";
+option java_multiple_files = true;
+
+// Global /proc/sys/net values worth surfacing during diagnosis.
+message GlobalSysctls {
+  int32 ipv4_forwarding = 1;
+  int32 ipv6_forwarding = 2;
+  int32 ipv6_disable = 3;
+  string tcp_congestion_control = 4;
+  string tcp_available_congestion_control = 5;
+  int32 tcp_fastopen = 6;
+  int32 tcp_mtu_probing = 7;
+  int32 tcp_base_mss = 8;
+  int32 tcp_syn_retries = 9;
+  int32 tcp_synack_retries = 10;
+  int32 tcp_retries2 = 11;
+  int32 tcp_fin_timeout = 12;
+  int32 tcp_keepalive_time = 13;
+  int32 tcp_ecn = 14;
+  int32 tcp_timestamps = 15;
+  int32 tcp_sack = 16;
+  int32 default_qdisc_present = 17;
+  string default_qdisc = 18;
+  string ping_group_range = 19;
+  int32 ip_no_pmtu_disc = 20;
+  int32 route_min_pmtu = 21;
+  // Raw dump of every sysctl we read, keyed by path relative to
+  // /proc/sys/net. Lets the UI show everything without schema churn.
+  map<string, string> raw = 22;
+}
+
+// Per-protocol counters from /proc/net/snmp and /proc/net/netstat. Useful for
+// spotting e.g. rising InCsumErrors or OutNoRoutes.
+message ProtocolCounters {
+  map<string, int64> ip = 1;
+  map<string, int64> icmp = 2;
+  map<string, int64> tcp = 3;
+  map<string, int64> udp = 4;
+  map<string, int64> ip6 = 5;
+  map<string, int64> icmp6 = 6;
+  map<string, int64> udp6 = 7;
+  map<string, int64> tcp_ext = 8;
+  map<string, int64> ip_ext = 9;
+}
+
+enum FirewallBackend {
+  FIREWALL_BACKEND_UNSPECIFIED = 0;
+  FIREWALL_BACKEND_IPTABLES = 1;
+  FIREWALL_BACKEND_NFTABLES = 2;
+  // Modern Android filters per-UID traffic in eBPF (bpfloader/netd), not in
+  // netfilter, so chain dumps look empty even though traffic is blocked.
+  FIREWALL_BACKEND_EBPF = 3;
+}
+
+message FirewallChain {
+  string table = 1;
+  string name = 2;
+  string policy = 3;
+  uint64 packets = 4;
+  uint64 bytes = 5;
+  repeated string rules = 6;   // rendered rule text, one per line
+}
+
+// Android's per-UID firewall chains (dozable, standby, powersave, restricted,
+// low power standby, oem). Read from eBPF maps when accessible.
+message UidFirewallState {
+  uint32 uid = 1;
+  bool blocked_dozable = 2;
+  bool blocked_standby = 3;
+  bool blocked_powersave = 4;
+  bool blocked_restricted = 5;
+  bool blocked_low_power_standby = 6;
+  bool blocked_metered_allow = 7;
+  bool blocked_metered_deny_user = 8;
+  bool blocked_metered_deny_admin = 9;
+  // Raw match bitmask from the netd uid owner map, when it could be read.
+  uint32 raw_match = 10;
+  bool source_available = 11;
+}
+
+message FirewallState {
+  repeated FirewallBackend backends_detected = 1;
+  repeated FirewallChain ipv4_chains = 2;
+  repeated FirewallChain ipv6_chains = 3;
+  // Pinned eBPF objects under /sys/fs/bpf that relate to networking.
+  repeated string bpf_pinned_objects = 4;
+  bool bpf_maps_readable = 5;
+  // Set when the daemon had to fall back to shelling out.
+  bool used_shell_fallback = 6;
+  string collection_note = 7;
+}
+
+message Qdisc {
+  uint32 interface_index = 1;
+  string interface_name = 2;
+  string kind = 3;
+  uint32 handle = 4;
+  uint32 parent = 5;
+  uint64 bytes_sent = 6;
+  uint64 packets_sent = 7;
+  uint64 drops = 8;
+  uint64 overlimits = 9;
+  uint64 requeues = 10;
+  uint32 backlog_bytes = 11;
+  uint32 backlog_packets = 12;
+  string options_summary = 13;
+}
+
+message NetworkNamespace {
+  int32 id = 1;
+  string name = 2;
+  uint64 inode = 3;
+  bool is_current = 4;
+}
+
+// Resolver configuration visible from the kernel/filesystem side. On Android
+// this is mostly empty because netd owns DNS, which is itself a useful signal.
+message ResolverState {
+  repeated IpAddress resolv_conf_servers = 1;
+  repeated string resolv_conf_domains = 2;
+  bool resolv_conf_present = 3;
+  string resolv_conf_note = 4;
+}
+
+// 464XLAT state inferred from the kernel: a v4-* interface stacked on a
+// v6-only network means clatd is running.
+message Clat464State {
+  bool active = 1;
+  string clat_interface = 2;
+  string base_interface = 3;
+  IpAddress clat_ipv4_address = 4;
+  IpAddress clat_ipv6_address = 5;
+  IpPrefix detected_nat64_prefix = 6;
+  string detection_method = 7;
+}

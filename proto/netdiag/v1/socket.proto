@@ -1,0 +1,128 @@
+// Socket diagnostics from NETLINK_INET_DIAG (TCP/UDP), which is how we get the
+// owning UID, the inode, and per-connection TCP state without parsing
+// /proc/net/tcp.
+syntax = "proto3";
+
+package netdiag.v1;
+
+import "netdiag/v1/common.proto";
+
+option java_package = "dev.okhsunrog.netdiag.proto";
+option java_multiple_files = true;
+
+enum SocketProtocol {
+  SOCKET_PROTOCOL_UNSPECIFIED = 0;
+  SOCKET_PROTOCOL_TCP = 1;
+  SOCKET_PROTOCOL_UDP = 2;
+}
+
+// TCP_* states. UDP sockets report ESTABLISHED (connected) or CLOSE (unbound).
+enum TcpState {
+  TCP_STATE_UNSPECIFIED = 0;
+  TCP_STATE_ESTABLISHED = 1;
+  TCP_STATE_SYN_SENT = 2;
+  TCP_STATE_SYN_RECV = 3;
+  TCP_STATE_FIN_WAIT1 = 4;
+  TCP_STATE_FIN_WAIT2 = 5;
+  TCP_STATE_TIME_WAIT = 6;
+  TCP_STATE_CLOSE = 7;
+  TCP_STATE_CLOSE_WAIT = 8;
+  TCP_STATE_LAST_ACK = 9;
+  TCP_STATE_LISTEN = 10;
+  TCP_STATE_CLOSING = 11;
+  TCP_STATE_NEW_SYN_RECV = 12;
+}
+
+// Selected fields of `struct tcp_info`. These are what tell you whether a
+// connection is merely idle or actually wedged.
+message TcpInfo {
+  uint32 rto_us = 1;
+  uint32 ato_us = 2;
+  uint32 snd_mss = 3;
+  uint32 rcv_mss = 4;
+  uint32 unacked = 5;
+  uint32 sacked = 6;
+  uint32 lost = 7;
+  uint32 retrans = 8;
+  uint32 total_retrans = 9;
+  uint32 rtt_us = 10;
+  uint32 rtt_var_us = 11;
+  uint32 snd_cwnd = 12;
+  uint32 snd_ssthresh = 13;
+  uint32 advmss = 14;
+  uint32 pmtu = 15;
+  uint32 last_data_sent_ms = 16;
+  uint32 last_data_recv_ms = 17;
+  uint32 last_ack_recv_ms = 18;
+  uint64 bytes_sent = 19;
+  uint64 bytes_received = 20;
+  uint64 delivered = 21;
+  uint32 ca_state = 22;
+  uint32 probes = 23;
+  uint32 backoff = 24;
+  bool retransmitting = 25;
+}
+
+message Socket {
+  IpFamily family = 1;
+  SocketProtocol protocol = 2;
+  TcpState state = 3;
+  IpAddress local_address = 4;
+  uint32 local_port = 5;
+  IpAddress remote_address = 6;
+  uint32 remote_port = 7;
+  // Owning UID. On Android this maps directly to an installed app (>= 10000)
+  // or to a system component.
+  uint32 uid = 8;
+  uint64 inode = 9;
+  // Interface the socket is bound to (SO_BINDTODEVICE / scope id), 0 if none.
+  uint32 interface_index = 10;
+  string interface_name = 11;
+  uint32 rx_queue = 12;
+  uint32 tx_queue = 13;
+  // SO_MARK. On Android the low 16 bits carry the netId of the Network the
+  // socket is pinned to, which is the key to correlating sockets to Networks.
+  uint32 mark = 14;
+  bool has_mark = 15;
+  // Netid extracted from `mark` using the Android fwmark layout, 0 if none.
+  uint32 net_id = 16;
+  TcpInfo tcp_info = 17;
+  string congestion_control = 18;
+  uint32 timer = 19;          // 0 none, 1 retransmit, 2 keepalive, 3 timewait, 4 probe
+  uint32 timer_expires_ms = 20;
+  uint32 retransmits = 21;
+  uint64 socket_cookie = 22;
+  // Resolved package name(s) sharing this UID, filled in by the app, not the
+  // daemon (the daemon has no PackageManager).
+  repeated string package_names = 23;
+}
+
+// Aggregated per-state counts, cheap to render and to diff over time.
+message SocketSummary {
+  uint32 total = 1;
+  map<string, uint32> by_state = 2;       // TcpState name -> count
+  uint32 established = 3;
+  uint32 syn_sent = 4;
+  uint32 close_wait = 5;
+  uint32 fin_wait = 6;
+  uint32 time_wait = 7;
+  uint32 listen = 8;
+  uint32 v4_count = 9;
+  uint32 v6_count = 10;
+  uint32 retransmitting = 11;
+}
+
+// Filter for GetSockets / WatchSockets. Empty repeated fields mean "any".
+message SocketFilter {
+  repeated SocketProtocol protocols = 1;
+  repeated IpFamily families = 2;
+  repeated TcpState states = 3;
+  repeated uint32 uids = 4;
+  repeated uint32 interface_indexes = 5;
+  uint32 local_port = 6;
+  uint32 remote_port = 7;
+  // When true, include struct tcp_info (slightly more expensive).
+  bool include_tcp_info = 8;
+  // Cap on returned rows; 0 means daemon default.
+  uint32 limit = 9;
+}

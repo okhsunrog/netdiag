@@ -1,0 +1,137 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # The schema is the contract between the daemon and the app, so it is checked
+  # before anything is built against it.
+  proto:
+    name: Protocol
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # buf breaking needs the history to compare against main.
+          fetch-depth: 0
+
+      - uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lint
+        run: buf lint
+        working-directory: proto
+
+      - name: Check for breaking changes
+        # A wire-incompatible change must fail here rather than turn into a
+        # mystery parse error on a device running an older app.
+        if: github.event_name == 'pull_request'
+        run: buf breaking --against "https://github.com/${{ github.repository }}.git#branch=main,subdir=proto"
+        working-directory: proto
+
+  daemon:
+    name: Daemon
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: daemon
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - name: Format
+        run: cargo fmt --check
+        working-directory: daemon
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: daemon
+
+      - name: Test
+        run: cargo test
+        working-directory: daemon
+
+  daemon-android:
+    name: Daemon (Android cross-build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: daemon
+
+      - name: Install protoc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r28c
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Cross-compile
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: ./scripts/build-daemon.sh
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netdiagd-arm64-v8a
+          path: android/app/src/main/jniLibs/arm64-v8a/libnetdiagd.so
+
+  app:
+    name: App
+    runs-on: ubuntu-latest
+    # The APK embeds the daemon, so the cross-build has to land first.
+    needs: daemon-android
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: netdiagd-arm64-v8a
+          path: android/app/src/main/jniLibs/arm64-v8a
+
+      - name: Build
+        run: ./gradlew :app:assembleDebug --no-daemon
+        working-directory: android
+
+      - name: Unit tests
+        run: ./gradlew :app:testDebugUnitTest --no-daemon
+        working-directory: android
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: netdiag-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk

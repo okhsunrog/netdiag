@@ -1,0 +1,158 @@
+// Realtime network events for the timeline view.
+//
+// Kernel-side events come from NETLINK_ROUTE multicast groups (link, ipv4/ipv6
+// address, ipv4/ipv6 route, rule, neighbour). Framework-side events come from
+// the app's ConnectivityManager.NetworkCallback and are pushed into the same
+// timeline so both layers are interleaved on one axis.
+syntax = "proto3";
+
+package netdiag.v1;
+
+import "netdiag/v1/common.proto";
+import "netdiag/v1/link.proto";
+import "netdiag/v1/route.proto";
+import "netdiag/v1/socket.proto";
+import "netdiag/v1/android.proto";
+
+option java_package = "dev.okhsunrog.netdiag.proto";
+option java_multiple_files = true;
+
+enum EventSource {
+  EVENT_SOURCE_UNSPECIFIED = 0;
+  EVENT_SOURCE_KERNEL = 1;      // netlink
+  EVENT_SOURCE_FRAMEWORK = 2;   // ConnectivityManager
+  EVENT_SOURCE_DAEMON = 3;      // daemon lifecycle / derived
+}
+
+enum EventSeverity {
+  EVENT_SEVERITY_UNSPECIFIED = 0;
+  EVENT_SEVERITY_DEBUG = 1;
+  EVENT_SEVERITY_INFO = 2;
+  EVENT_SEVERITY_NOTICE = 3;   // user-visible transition, e.g. Wi-Fi -> cellular
+  EVENT_SEVERITY_WARNING = 4;  // e.g. IPv6 lost, validation failed
+}
+
+message LinkEvent {
+  bool added = 1;       // false => removed
+  Interface interface = 2;
+  // Set when this event is a state change rather than add/remove.
+  bool went_up = 3;
+  bool went_down = 4;
+  bool mtu_changed = 5;
+  uint32 previous_mtu = 6;
+}
+
+message AddressEvent {
+  bool added = 1;
+  uint32 interface_index = 2;
+  string interface_name = 3;
+  LinkAddress address = 4;
+  // True when this add/remove changed whether the interface has any global
+  // address of that family: the "IPv6 gained/lost" signal.
+  bool family_gained = 5;
+  bool family_lost = 6;
+  IpFamily family = 7;
+}
+
+message RouteEvent {
+  bool added = 1;
+  Route route = 2;
+  bool default_route_changed = 3;
+}
+
+message RuleEvent {
+  bool added = 1;
+  RoutingRule rule = 2;
+}
+
+message NeighborEvent {
+  bool added = 1;
+  Neighbor neighbor = 2;
+  NeighborState previous_state = 3;
+  // Gateway going FAILED/INCOMPLETE is a strong "upstream is gone" hint.
+  bool is_gateway = 4;
+}
+
+message SocketEvent {
+  Socket socket = 1;
+  TcpState previous_state = 2;
+  bool appeared = 3;
+  bool disappeared = 4;
+}
+
+// Framework-side transitions, pushed by the app.
+enum FrameworkEventKind {
+  FRAMEWORK_EVENT_KIND_UNSPECIFIED = 0;
+  FRAMEWORK_EVENT_KIND_AVAILABLE = 1;
+  FRAMEWORK_EVENT_KIND_LOST = 2;
+  FRAMEWORK_EVENT_KIND_LOSING = 3;
+  FRAMEWORK_EVENT_KIND_CAPABILITIES_CHANGED = 4;
+  FRAMEWORK_EVENT_KIND_LINK_PROPERTIES_CHANGED = 5;
+  FRAMEWORK_EVENT_KIND_DEFAULT_NETWORK_CHANGED = 6;
+  FRAMEWORK_EVENT_KIND_BLOCKED_STATUS_CHANGED = 7;
+  FRAMEWORK_EVENT_KIND_VALIDATION_CHANGED = 8;
+  FRAMEWORK_EVENT_KIND_PRIVATE_DNS_CHANGED = 9;
+  FRAMEWORK_EVENT_KIND_DNS_SERVERS_CHANGED = 10;
+  FRAMEWORK_EVENT_KIND_TRANSPORT_CHANGED = 11;
+  FRAMEWORK_EVENT_KIND_VPN_CHANGED = 12;
+  FRAMEWORK_EVENT_KIND_NAT64_PREFIX_CHANGED = 13;
+  FRAMEWORK_EVENT_KIND_CAPTIVE_PORTAL = 14;
+}
+
+message FrameworkEvent {
+  FrameworkEventKind kind = 1;
+  AndroidNetwork network = 2;
+  // Short description of what changed, e.g. "VALIDATED: false -> true".
+  string change_summary = 3;
+  // Previous and current default network ids on a default-network change.
+  int32 previous_net_id = 4;
+  int32 current_net_id = 5;
+}
+
+message DaemonEvent {
+  string message = 1;
+  bool started = 2;
+  bool stopping = 3;
+  string version = 4;
+}
+
+message NetworkEvent {
+  int64 unix_ms = 1;
+  // Monotonic timestamp so ordering survives wall-clock jumps.
+  uint64 monotonic_ns = 2;
+  EventSource source = 3;
+  EventSeverity severity = 4;
+  // Pre-rendered one-line description; the daemon produces it so the timeline
+  // stays consistent and clients do not each reinvent the wording.
+  string summary = 5;
+  uint64 sequence = 6;
+
+  oneof payload {
+    LinkEvent link = 10;
+    AddressEvent address = 11;
+    RouteEvent route = 12;
+    RuleEvent rule = 13;
+    NeighborEvent neighbor = 14;
+    SocketEvent socket = 15;
+    FrameworkEvent framework = 16;
+    DaemonEvent daemon = 17;
+  }
+}
+
+// Which event classes a subscription wants. Empty means "all kernel classes".
+message EventFilter {
+  bool links = 1;
+  bool addresses = 2;
+  bool routes = 3;
+  bool rules = 4;
+  bool neighbors = 5;
+  bool sockets = 6;
+  // Only report socket events for these UIDs (requires `sockets`).
+  repeated uint32 socket_uids = 7;
+  // Socket polling interval in milliseconds; sockets have no netlink multicast
+  // group for state changes, so they are diffed by polling. 0 = daemon default.
+  uint32 socket_poll_ms = 8;
+  // Suppress neighbour churn, which is very noisy.
+  bool exclude_neighbor_probe_noise = 9;
+  EventSeverity min_severity = 10;
+}
