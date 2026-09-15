@@ -7,9 +7,23 @@ what that actually cost and bought.
 
 [Slint]: https://slint.dev
 
-Built against Slint `master` (1.18.0-unreleased, `bf511bc`), because
-`FlexboxLayout` and the per-item `cross-axis-self-alignment` property are not in
-a release yet.
+Built against Slint `master` (1.18.0-unreleased), because `FlexboxLayout` and
+the per-item `cross-axis-self-alignment` property are not in a release yet.
+Verified against `bf511bc` and again against `9405a2df`, so it is not pinned to
+one exact revision; `slint-app/Cargo.lock` records what a given build used.
+
+`slint-app/` is deliberately **its own cargo workspace**. Tracking someone's
+master branch should not sit in the daemon's dependency graph, and the daemon's
+CI should never have to fetch it.
+
+```sh
+cd slint-app
+# Slint compiles its own Java helper with `javac -source 8`, which JDK 26
+# rejects, and picks an android.jar too old for that helper.
+export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
+export ANDROID_JAR="$ANDROID_HOME/platforms/android-34/android.jar"
+cargo ndk -t arm64-v8a -P 31 build --release --lib
+```
 
 ## The short version
 

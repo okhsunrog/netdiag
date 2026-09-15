@@ -223,12 +223,14 @@ cargo test --workspace           # 138 unit tests, no device needed
 cd proto && buf lint && buf breaking --against '../.git#branch=main,subdir=proto'
 ```
 
-The Slint frontend also runs on the desktop against a daemon on the development
-machine, which is the quickest way to look at the UI:
+The Slint frontend is a separate cargo workspace (it tracks Slint's master
+branch, which should not be in the daemon's dependency graph). It also runs on
+the desktop against a daemon on the development machine, which is the quickest
+way to look at the UI:
 
 ```sh
 sudo ./target/debug/netdiagd --socket @netdiag --allow-uid "$(id -u)"
-cargo run -p netdiag-slint --bin netdiag-slint-desktop -- --connect
+cd slint-app && cargo run --bin netdiag-slint-desktop -- --connect
 ```
 
 The daemon's tests are pure functions over parsing, filtering and the rule

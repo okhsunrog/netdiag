@@ -1,3 +1,7 @@
+# Deliberately its own workspace: see the `exclude` in the repository root.
+# Tracking Slint's master branch should not be in the daemon's dependency graph.
+[workspace]
+
 [package]
 name = "netdiag-slint"
 version = "0.1.0"
@@ -16,10 +20,10 @@ name = "netdiag-slint-desktop"
 path = "src/bin/desktop.rs"
 
 [dependencies]
-netdiag-ipc = { workspace = true }
-anyhow = { workspace = true }
-tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "process"] }
-tracing = { workspace = true }
+netdiag-ipc = { path = "../crates/netdiag-ipc" }
+anyhow = "1.0.104"
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros", "process"] }
+tracing = "0.1.44"
 
 # Slint from master: this build uses FlexboxLayout and the per-item
 # cross-axis-self-alignment property, neither of which is in a release yet.
@@ -32,7 +36,7 @@ slint = { git = "https://github.com/slint-ui/slint", branch = "master", default-
 # how it is iterated on without a phone attached.
 [target.'cfg(not(target_os = "android"))'.dependencies]
 slint = { git = "https://github.com/slint-ui/slint", branch = "master", default-features = false, features = ["backend-winit", "renderer-femtovg"] }
-tracing-subscriber = { workspace = true, features = ["fmt", "env-filter"] }
+tracing-subscriber = { version = "0.3.23", features = ["fmt", "env-filter"] }
 # Only for the harness's --snapshot flag, which renders the window to a file
 # so the UI can be reviewed without capturing the developer's screen.
 png = "0.18"
@@ -44,7 +48,7 @@ slint = { git = "https://github.com/slint-ui/slint", branch = "master", default-
 jni = "0.22"
 android_logger = "0.15"
 log = "0.4"
-libc = { workspace = true }
+libc = "0.2.189"
 
 [build-dependencies]
 slint-build = { git = "https://github.com/slint-ui/slint", branch = "master" }
@@ -79,3 +83,10 @@ label = "Net Inspector (Slint)"
 # The daemon must be a real file on disk for su to exec it.
 extract_native_libs = true
 debuggable = true
+
+[profile.release]
+# The binary ships inside an APK, so size matters.
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

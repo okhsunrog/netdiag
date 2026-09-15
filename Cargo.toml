@@ -3,11 +3,15 @@ resolver = "3"
 members = [
     "crates/netdiag-ipc",
     "daemon",
-    "slint-app",
 ]
+# The Slint frontend is an experiment on a git dependency tracking Slint's
+# master branch. Keeping it out of this workspace means the daemon's build and
+# CI never have to fetch or resolve it; it has its own lockfile and is built
+# explicitly from slint-app/.
+exclude = ["slint-app"]
 
-# Pinned centrally so the daemon and both frontends cannot drift onto different
-# versions of the protocol's own dependencies.
+# Pinned centrally so the daemon and the shared protocol crate cannot drift onto
+# different versions of their common dependencies.
 [workspace.dependencies]
 anyhow = "1.0.104"
 bytes = "1.12.1"
