@@ -570,6 +570,7 @@ component SocketsScreen inherits VerticalLayout {
     callback toggle-established();
     callback toggle-apps();
     callback toggle-listen();
+    callback toggle-socket(int);
     callback refresh();
 
     padding: 12px;
@@ -623,7 +624,7 @@ component SocketsScreen inherits VerticalLayout {
     }
 
     ListView {
-        for socket in root.data.rows: HorizontalLayout {
+        for socket[index] in root.data.rows: HorizontalLayout {
             padding-top: 4px;
             padding-bottom: 4px;
             spacing: 8px;
@@ -633,9 +634,11 @@ component SocketsScreen inherits VerticalLayout {
                 status: socket.status;
                 cross-axis-self-alignment: start;
             }
-            VerticalLayout {
+            Expander {
                 horizontal-stretch: 1;
-                spacing: 1px;
+                expanded: socket.expanded;
+                toggled => { root.toggle-socket(index); }
+
                 MonoText { text: socket.tuple; }
                 HorizontalLayout {
                     spacing: 8px;
@@ -651,6 +654,15 @@ component SocketsScreen inherits VerticalLayout {
                         horizontal-stretch: 1;
                     }
                 }
+                // What tcp_info says, when the kernel keeps one for this
+                // socket. A UDP or listening socket has none, and an empty
+                // line is better than inventing zeroes.
+                if socket.health != "": MonoText {
+                    text: socket.health;
+                    color: Style.color-for(socket.status);
+                    wrap: word-wrap;
+                }
+                if socket.expanded: FieldList { fields: socket.detail; }
             }
         }
     }
@@ -809,6 +821,7 @@ export component App inherits Window {
     callback clear-events();
     callback filter-changed(string);
     callback sockets-filter-changed();
+    callback toggle-socket(int);
     callback start-capture(string);
     callback stop-capture();
     callback save-capture();
@@ -931,6 +944,7 @@ export component App inherits Window {
                     root.hide-listen = !root.hide-listen;
                     root.sockets-filter-changed();
                 }
+                toggle-socket(index) => { root.toggle-socket(index); }
                 refresh => { root.refresh(); }
             }
             if root.tab == 5: CaptureScreen {

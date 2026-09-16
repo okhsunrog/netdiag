@@ -17,7 +17,9 @@ pub fn overview(snapshot: &proto::Snapshot) -> ui::OverviewData {
             .or_else(|| state.networks.iter().find(|network| network.is_default))
     });
 
-    let caps = active.and_then(|n| n.capabilities.clone()).unwrap_or_default();
+    let caps = active
+        .and_then(|n| n.capabilities.clone())
+        .unwrap_or_default();
     let link = active
         .and_then(|n| n.link_properties.clone())
         .unwrap_or_default();
@@ -35,7 +37,11 @@ pub fn overview(snapshot: &proto::Snapshot) -> ui::OverviewData {
     let mut chips = Vec::new();
     if active.is_some() {
         chips.push(chip(
-            if caps.validated { "VALIDATED" } else { "NOT VALIDATED" },
+            if caps.validated {
+                "VALIDATED"
+            } else {
+                "NOT VALIDATED"
+            },
             if caps.validated {
                 ui::Status::Pass
             } else {
@@ -43,7 +49,11 @@ pub fn overview(snapshot: &proto::Snapshot) -> ui::OverviewData {
             },
         ));
         chips.push(chip(
-            if caps.not_metered { "UNMETERED" } else { "METERED" },
+            if caps.not_metered {
+                "UNMETERED"
+            } else {
+                "METERED"
+            },
             if caps.not_metered {
                 ui::Status::Pass
             } else {
@@ -181,8 +191,9 @@ pub fn interfaces(snapshot: &proto::Snapshot) -> Vec<ui::InterfaceRow> {
 
     rows.into_iter()
         .map(|iface| {
-            let flags = iface.flags.clone().unwrap_or_default();
-            let kind = proto::LinkKind::try_from(iface.kind).unwrap_or(proto::LinkKind::Unspecified);
+            let flags = iface.flags.unwrap_or_default();
+            let kind =
+                proto::LinkKind::try_from(iface.kind).unwrap_or(proto::LinkKind::Unspecified);
 
             let mut chips = vec![chip(
                 if flags.up { "UP" } else { "DOWN" },
@@ -290,7 +301,11 @@ pub fn route_tables(snapshot: &proto::Snapshot) -> Vec<ui::RouteTableRow> {
                 .iter()
                 .filter(|r| r.table == table)
                 .collect();
-            let name = snapshot.table_names.get(&table).cloned().unwrap_or_default();
+            let name = snapshot
+                .table_names
+                .get(&table)
+                .cloned()
+                .unwrap_or_default();
             let defaults = routes.iter().filter(|r| r.is_default).count();
 
             ui::RouteTableRow {
@@ -323,7 +338,8 @@ pub fn route_tables(snapshot: &proto::Snapshot) -> Vec<ui::RouteTableRow> {
 // ---- Diagnosis --------------------------------------------------------------
 
 pub fn check_row(check: &proto::Check) -> ui::CheckRow {
-    let status = proto::CheckStatus::try_from(check.status).unwrap_or(proto::CheckStatus::Unspecified);
+    let status =
+        proto::CheckStatus::try_from(check.status).unwrap_or(proto::CheckStatus::Unspecified);
 
     let mut evidence: Vec<(String, String)> = check
         .evidence
@@ -357,8 +373,8 @@ pub fn check_row(check: &proto::Check) -> ui::CheckRow {
 }
 
 pub fn finding_row(finding: &proto::Finding) -> ui::FindingRow {
-    let severity =
-        proto::FindingSeverity::try_from(finding.severity).unwrap_or(proto::FindingSeverity::Unspecified);
+    let severity = proto::FindingSeverity::try_from(finding.severity)
+        .unwrap_or(proto::FindingSeverity::Unspecified);
 
     ui::FindingRow {
         key: shared(finding.key.clone()),
@@ -406,7 +422,13 @@ pub fn diagnosis(response: &proto::DiagnoseResponse) -> ui::DiagnosisData {
         summary: shared(response.summary.clone()),
         counts: model(counts),
         checks: model(response.checks.iter().map(check_row).collect::<Vec<_>>()),
-        findings: model(response.findings.iter().map(finding_row).collect::<Vec<_>>()),
+        findings: model(
+            response
+                .findings
+                .iter()
+                .map(finding_row)
+                .collect::<Vec<_>>(),
+        ),
     }
 }
 
@@ -430,7 +452,11 @@ pub fn app_detail(state: &proto::AppNetworkState) -> ui::AppDetailData {
 
     let chips = vec![
         chip(
-            if state.ipv4_path_ok { "IPv4 OK" } else { "IPv4 FAILED" },
+            if state.ipv4_path_ok {
+                "IPv4 OK"
+            } else {
+                "IPv4 FAILED"
+            },
             if state.ipv4_path_ok {
                 ui::Status::Pass
             } else {
@@ -438,7 +464,11 @@ pub fn app_detail(state: &proto::AppNetworkState) -> ui::AppDetailData {
             },
         ),
         chip(
-            if state.ipv6_path_ok { "IPv6 OK" } else { "IPv6 FAILED" },
+            if state.ipv6_path_ok {
+                "IPv6 OK"
+            } else {
+                "IPv6 FAILED"
+            },
             if state.ipv6_path_ok {
                 ui::Status::Pass
             } else {
@@ -477,9 +507,20 @@ pub fn app_detail(state: &proto::AppNetworkState) -> ui::AppDetailData {
         ));
     }
 
-    let mut routing_fields = Vec::new();
-    routing_fields.push(lookup_field("IPv4", routing.lookup_v4.as_ref(), &routing.egress_interface_v4, routing.table_v4));
-    routing_fields.push(lookup_field("IPv6", routing.lookup_v6.as_ref(), &routing.egress_interface_v6, routing.table_v6));
+    let routing_fields = vec![
+        lookup_field(
+            "IPv4",
+            routing.lookup_v4.as_ref(),
+            &routing.egress_interface_v4,
+            routing.table_v4,
+        ),
+        lookup_field(
+            "IPv6",
+            routing.lookup_v6.as_ref(),
+            &routing.egress_interface_v6,
+            routing.table_v6,
+        ),
+    ];
 
     let mut vpn_fields = Vec::new();
     if vpn.vpn_present {
@@ -548,7 +589,11 @@ pub fn app_detail(state: &proto::AppNetworkState) -> ui::AppDetailData {
         vpn_present: vpn.vpn_present,
         vpn_title: shared(format!("VPN · {}", vpn.vpn_interface)),
         vpn_chip: chip(
-            if vpn.app_uses_vpn { "IN TUNNEL" } else { "BYPASSES" },
+            if vpn.app_uses_vpn {
+                "IN TUNNEL"
+            } else {
+                "BYPASSES"
+            },
             if vpn.app_uses_vpn {
                 ui::Status::Pass
             } else {
@@ -575,7 +620,11 @@ fn lookup_field(
         return field(family, "not looked up");
     };
     if let Some(error) = &lookup.error {
-        return field_status(family, format!("no route: {}", error.message), ui::Status::Fail);
+        return field_status(
+            family,
+            format!("no route: {}", error.message),
+            ui::Status::Fail,
+        );
     }
     let Some(route) = &lookup.route else {
         return field(family, "not looked up");
@@ -620,7 +669,8 @@ pub fn empty_app_detail() -> ui::AppDetailData {
 // ---- Timeline ---------------------------------------------------------------
 
 pub fn event_row(event: &proto::NetworkEvent) -> ui::EventRow {
-    let source = proto::EventSource::try_from(event.source).unwrap_or(proto::EventSource::Unspecified);
+    let source =
+        proto::EventSource::try_from(event.source).unwrap_or(proto::EventSource::Unspecified);
     let severity =
         proto::EventSeverity::try_from(event.severity).unwrap_or(proto::EventSeverity::Unspecified);
 
@@ -751,18 +801,183 @@ pub fn socket_row(socket: &proto::Socket, owner: String) -> ui::SocketRow {
     if !socket.interface_name.is_empty() {
         meta.push_str(&format!("  {}", socket.interface_name));
     }
-    // Retransmits are the cheapest signal that a socket is connected but the
-    // path is not carrying its packets.
-    if socket.retransmits != 0 {
-        meta.push_str(&format!("  {} retx", socket.retransmits));
-    }
 
+    let info = socket.tcp_info.as_ref();
     ui::SocketRow {
         state: shared(tcp_state_label(state)),
-        status: socket_status(state),
+        // An ESTABLISHED socket whose path has stopped carrying packets still
+        // reads as ESTABLISHED. Colouring it by tcp_info instead is the whole
+        // reason this screen shows more than `ss` does.
+        status: match info.map(socket_health) {
+            Some(SocketHealth::Stalled) => ui::Status::Fail,
+            Some(SocketHealth::Struggling) => ui::Status::Warn,
+            _ => socket_status(state),
+        },
         tuple: shared(socket_tuple(socket)),
         meta: shared(meta),
         owner: shared(owner),
+        health: shared(info.map(|i| health_line(socket, i)).unwrap_or_default()),
+        detail: model(info.map(tcp_info_fields).unwrap_or_default()),
+        expanded: false,
+    }
+}
+
+/// How much trouble a connection is in, read from `struct tcp_info`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum SocketHealth {
+    Fine,
+    Struggling,
+    Stalled,
+}
+
+/// Linux `tcp_ca_state`. Anything past Disorder means the stack has concluded
+/// packets are being lost rather than merely reordered.
+const CA_STATE_RECOVERY: u32 = 3;
+const CA_STATE_LOSS: u32 = 4;
+
+fn socket_health(info: &proto::TcpInfo) -> SocketHealth {
+    // `backoff` is exponential retransmission backoff and `probes` counts
+    // zero-window probes: either means the far end has stopped answering, not
+    // that the path is merely slow.
+    if info.backoff > 1 || info.probes > 0 || info.ca_state == CA_STATE_LOSS {
+        return SocketHealth::Stalled;
+    }
+    if info.retransmitting
+        || info.ca_state == CA_STATE_RECOVERY
+        || info.lost > 0
+        || info.unacked > 0 && info.retrans > 0
+    {
+        return SocketHealth::Struggling;
+    }
+    SocketHealth::Fine
+}
+
+/// One line: the round trip time, then whatever is wrong.
+fn health_line(socket: &proto::Socket, info: &proto::TcpInfo) -> String {
+    let mut parts = Vec::new();
+    if info.rtt_us != 0 {
+        // Millisecond resolution: a phone's RTT is tens of milliseconds and the
+        // microseconds are noise on a screen.
+        parts.push(format!("rtt {:.1} ms", info.rtt_us as f64 / 1000.0));
+    }
+    if info.ca_state == CA_STATE_LOSS {
+        parts.push("in loss recovery".to_string());
+    } else if info.ca_state == CA_STATE_RECOVERY {
+        parts.push("recovering".to_string());
+    }
+    if info.backoff > 1 {
+        parts.push(format!("backoff x{}", info.backoff));
+    }
+    if info.probes > 0 {
+        parts.push(format!("{} zero-window probes", info.probes));
+    }
+    if socket.retransmits != 0 {
+        parts.push(format!("{} retx pending", socket.retransmits));
+    } else if info.total_retrans != 0 {
+        parts.push(format!("{} retransmits", info.total_retrans));
+    }
+    if info.unacked != 0 {
+        parts.push(format!("{} unacked", info.unacked));
+    }
+    // Only when nothing has arrived for a while: on a healthy idle socket this
+    // is just "idle", which is not news.
+    if info.last_data_recv_ms > 60_000 {
+        parts.push(format!("silent {}", duration_ms(info.last_data_recv_ms)));
+    }
+    parts.join(" · ")
+}
+
+fn tcp_info_fields(info: &proto::TcpInfo) -> Vec<ui::Field> {
+    let mut fields = vec![
+        field(
+            "RTT",
+            format!(
+                "{:.1} ms ± {:.1}",
+                info.rtt_us as f64 / 1000.0,
+                info.rtt_var_us as f64 / 1000.0
+            ),
+        ),
+        field("Congestion", ca_state_label(info.ca_state)),
+        field(
+            "Window",
+            format!("cwnd {} · ssthresh {}", info.snd_cwnd, info.snd_ssthresh),
+        ),
+        field(
+            "MSS",
+            format!(
+                "send {} · recv {} · advertised {}",
+                info.snd_mss, info.rcv_mss, info.advmss
+            ),
+        ),
+        field(
+            "In flight",
+            format!(
+                "{} unacked · {} sacked · {} lost",
+                info.unacked, info.sacked, info.lost
+            ),
+        ),
+        field(
+            "Retransmits",
+            format!("{} now · {} total", info.retrans, info.total_retrans),
+        ),
+        field(
+            "Bytes",
+            format!(
+                "{} sent · {} received",
+                bytes(info.bytes_sent),
+                bytes(info.bytes_received)
+            ),
+        ),
+        field(
+            "Last activity",
+            format!(
+                "sent {} · received {} · ack {}",
+                duration_ms(info.last_data_sent_ms),
+                duration_ms(info.last_data_recv_ms),
+                duration_ms(info.last_ack_recv_ms)
+            ),
+        ),
+    ];
+
+    // The path MTU the stack settled on, which is the other half of the MTU
+    // black hole story the diagnosis engine reports.
+    if info.pmtu != 0 {
+        fields.push(field("Path MTU", info.pmtu.to_string()));
+    }
+    if info.rto_us != 0 {
+        fields.push(field(
+            "Timers",
+            format!(
+                "rto {:.0} ms · ato {:.0} ms · backoff {}",
+                info.rto_us as f64 / 1000.0,
+                info.ato_us as f64 / 1000.0,
+                info.backoff
+            ),
+        ));
+    }
+    fields
+}
+
+fn ca_state_label(state: u32) -> &'static str {
+    match state {
+        0 => "open",
+        1 => "disorder",
+        2 => "congestion window reduced",
+        CA_STATE_RECOVERY => "recovery",
+        CA_STATE_LOSS => "loss",
+        _ => "unknown",
+    }
+}
+
+/// Milliseconds as something readable: the kernel reports "last data received"
+/// as a raw count that is routinely in the millions.
+fn duration_ms(value: u32) -> String {
+    match value {
+        0 => "now".to_string(),
+        v if v < 1_000 => format!("{v} ms"),
+        v if v < 60_000 => format!("{:.1} s", v as f64 / 1000.0),
+        v if v < 3_600_000 => format!("{} min", v / 60_000),
+        v => format!("{} h", v / 3_600_000),
     }
 }
 
@@ -787,7 +1002,13 @@ pub fn packet_row(packet: &proto::CapturedPacket) -> ui::PacketRow {
 
     let decoded = match (summary.source.as_ref(), summary.destination.as_ref()) {
         (Some(source), Some(destination)) => {
-            let port = |p: u32| if p == 0 { String::new() } else { format!(":{p}") };
+            let port = |p: u32| {
+                if p == 0 {
+                    String::new()
+                } else {
+                    format!(":{p}")
+                }
+            };
             Some(format!(
                 "{}{} {arrow} {}{}",
                 ip(source),
@@ -861,5 +1082,133 @@ pub fn empty_capture() -> ui::CaptureData {
         error: shared(""),
         saved_path: shared(""),
         packets: model(Vec::<ui::PacketRow>::new()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use slint::Model;
+
+    fn established(info: proto::TcpInfo) -> proto::Socket {
+        proto::Socket {
+            state: proto::TcpState::Established as i32,
+            tcp_info: Some(info),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_quiet_established_socket_is_fine() {
+        let info = proto::TcpInfo {
+            rtt_us: 42_000,
+            snd_cwnd: 10,
+            ..Default::default()
+        };
+        assert!(socket_health(&info) == SocketHealth::Fine);
+        // Fine still shows the RTT: it is the number people came for.
+        assert_eq!(health_line(&established(info), &info), "rtt 42.0 ms");
+    }
+
+    #[test]
+    fn loss_recovery_is_stalled_not_merely_struggling() {
+        // ca_state Loss means the stack gave up on the in-flight window, which
+        // is a different story from a few reordered packets.
+        let info = proto::TcpInfo {
+            ca_state: CA_STATE_LOSS,
+            ..Default::default()
+        };
+        assert!(socket_health(&info) == SocketHealth::Stalled);
+        assert!(health_line(&established(info), &info).contains("in loss recovery"));
+    }
+
+    #[test]
+    fn exponential_backoff_and_zero_window_probes_mean_the_far_end_stopped() {
+        for info in [
+            proto::TcpInfo {
+                backoff: 3,
+                ..Default::default()
+            },
+            proto::TcpInfo {
+                probes: 2,
+                ..Default::default()
+            },
+        ] {
+            assert!(
+                socket_health(&info) == SocketHealth::Stalled,
+                "backoff/probes must outrank a merely lossy path"
+            );
+        }
+        // A backoff of 1 is the ordinary first retransmission, not trouble.
+        let ordinary = proto::TcpInfo {
+            backoff: 1,
+            ..Default::default()
+        };
+        assert!(socket_health(&ordinary) == SocketHealth::Fine);
+    }
+
+    #[test]
+    fn a_lossy_path_is_struggling() {
+        let info = proto::TcpInfo {
+            retransmitting: true,
+            lost: 2,
+            ..Default::default()
+        };
+        assert!(socket_health(&info) == SocketHealth::Struggling);
+    }
+
+    #[test]
+    fn a_stalled_socket_is_coloured_by_tcp_info_not_by_its_tcp_state() {
+        // The point of the screen: this socket is ESTABLISHED and going nowhere.
+        let socket = established(proto::TcpInfo {
+            ca_state: CA_STATE_LOSS,
+            ..Default::default()
+        });
+        let row = socket_row(&socket, String::new());
+        assert_eq!(row.state, "ESTABLISHED");
+        assert_eq!(row.status, ui::Status::Fail);
+    }
+
+    #[test]
+    fn a_socket_without_tcp_info_says_nothing_rather_than_zeroes() {
+        // UDP and LISTEN sockets have no tcp_info; inventing "rtt 0.0 ms" would
+        // be worse than an empty line.
+        let socket = proto::Socket {
+            state: proto::TcpState::Listen as i32,
+            ..Default::default()
+        };
+        let row = socket_row(&socket, String::new());
+        assert_eq!(row.health, "");
+        assert_eq!(row.detail.row_count(), 0);
+        assert_eq!(row.status, socket_status(proto::TcpState::Listen));
+    }
+
+    #[test]
+    fn an_idle_socket_is_not_reported_as_silent() {
+        let info = proto::TcpInfo {
+            rtt_us: 20_000,
+            last_data_recv_ms: 5_000,
+            ..Default::default()
+        };
+        let line = health_line(&established(info), &info);
+        assert!(
+            !line.contains("silent"),
+            "five seconds idle is not news: {line}"
+        );
+
+        let long = proto::TcpInfo {
+            last_data_recv_ms: 600_000,
+            ..info
+        };
+        assert!(health_line(&established(long), &long).contains("silent 10 min"));
+    }
+
+    #[test]
+    fn durations_stay_readable_across_the_range() {
+        assert_eq!(duration_ms(0), "now");
+        assert_eq!(duration_ms(250), "250 ms");
+        assert_eq!(duration_ms(1_500), "1.5 s");
+        assert_eq!(duration_ms(600_000), "10 min");
+        assert_eq!(duration_ms(7_200_000), "2 h");
     }
 }

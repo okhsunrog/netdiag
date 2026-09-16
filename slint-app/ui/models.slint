@@ -72,6 +72,12 @@ export struct SocketRow {
     // Package names sharing this uid. Empty for system uids, which is the
     // honest answer rather than inventing a label for them.
     owner: string,
+    // What `struct tcp_info` says, one line: RTT and whatever is wrong. Empty
+    // for a socket the kernel keeps no tcp_info for, such as UDP or LISTEN.
+    health: string,
+    // The rest of tcp_info, shown on tap.
+    detail: [Field],
+    expanded: bool,
 }
 
 // One captured frame. The bytes stay in Rust: the UI only ever shows the

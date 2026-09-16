@@ -174,7 +174,7 @@ fn wire_connect(app: &ui::App, state: &Arc<AppState>) {
                             hello.daemon_version, hello.kernel_release
                         )));
                         app.set_connected(true);
-                        set_apps(&app, &state_for_ui, apps);
+                        set_apps(app, &state_for_ui, apps);
                         // The overview is the first screen, so load it now
                         // rather than making the user pull.
                         app.invoke_refresh();
@@ -187,7 +187,6 @@ fn wire_connect(app: &ui::App, state: &Arc<AppState>) {
                         app.set_connecting(false);
                         app.set_connect_error(shared(message));
                     });
-                    return;
                 }
             }
 
@@ -268,7 +267,7 @@ fn wire_refresh(app: &ui::App, state: &Arc<AppState>) {
                         if let Ok(mut slot) = state_for_ui.snapshot.lock() {
                             *slot = Some(snapshot);
                         }
-                        render_sockets(&app, &state_for_ui);
+                        render_sockets(app, &state_for_ui);
                     });
                 }
                 Err(e) => on_ui(weak, format!("snapshot failed: {e:#}"), |app, message| {
@@ -293,10 +292,12 @@ fn wire_diagnose(app: &ui::App, state: &Arc<AppState>) {
 
         state.runtime.clone_handle().spawn(async move {
             let stream = client
-                .stream(proto::client_frame::Body::Diagnose(proto::DiagnoseRequest {
-                    android_state,
-                    ..Default::default()
-                }))
+                .stream(proto::client_frame::Body::Diagnose(
+                    proto::DiagnoseRequest {
+                        android_state,
+                        ..Default::default()
+                    },
+                ))
                 .await;
 
             let (_id, mut rx) = match stream {
@@ -482,6 +483,20 @@ fn wire_toggles(app: &ui::App) {
     });
 
     let weak = app.as_weak();
+    app.on_toggle_socket(move |index| {
+        let Some(app) = weak.upgrade() else { return };
+        let data = app.get_sockets();
+        let mut rows: Vec<ui::SocketRow> = data.rows.iter().collect();
+        if let Some(row) = rows.get_mut(index as usize) {
+            row.expanded = !row.expanded;
+        }
+        app.set_sockets(ui::SocketsData {
+            rows: model(rows),
+            ..data
+        });
+    });
+
+    let weak = app.as_weak();
     app.on_toggle_interface(move |index| {
         let Some(app) = weak.upgrade() else { return };
         let mut rows: Vec<ui::InterfaceRow> = app.get_interfaces().iter().collect();
@@ -545,7 +560,8 @@ fn start_timeline(weak: slint::Weak<ui::App>, state: Arc<AppState>) {
 /// Newest first, bounded.
 fn push_event(app: &ui::App, row: ui::EventRow) {
     let existing = app.get_events();
-    let mut rows: Vec<ui::EventRow> = Vec::with_capacity(TIMELINE_CAPACITY.min(existing.row_count() + 1));
+    let mut rows: Vec<ui::EventRow> =
+        Vec::with_capacity(TIMELINE_CAPACITY.min(existing.row_count() + 1));
     rows.push(row);
     rows.extend(existing.iter().take(TIMELINE_CAPACITY - 1));
     app.set_events(model(rows));
@@ -646,9 +662,7 @@ fn default_capture_interface(snapshot: &proto::Snapshot) -> Option<String> {
                 .next_hops
                 .first()
                 .map(|hop| hop.out_interface_name.clone())
-                .filter(|name| {
-                    !name.is_empty() && !name.starts_with("dummy") && name != "lo"
-                })
+                .filter(|name| !name.is_empty() && !name.starts_with("dummy") && name != "lo")
         })
 }
 
@@ -740,9 +754,13 @@ fn wire_capture(app: &ui::App, state: &Arc<AppState>) {
                         } else {
                             None
                         };
-                        on_ui(weak.clone(), (packet, counters), |app, (packet, counters)| {
-                            push_packet(app, &packet, counters);
-                        });
+                        on_ui(
+                            weak.clone(),
+                            (packet, counters),
+                            |app, (packet, counters)| {
+                                push_packet(app, &packet, counters);
+                            },
+                        );
                     }
                     Some(proto::server_frame::Body::CaptureFinished(finished)) => {
                         on_ui(weak.clone(), finished, |app, finished| {
@@ -861,7 +879,8 @@ fn write_pcap(capture: &Capture, directory: &std::path::Path) -> Result<String, 
         return Err("the daemon never sent a pcap header, so the link type is unknown".to_string());
     }
 
-    std::fs::create_dir_all(directory).map_err(|e| format!("could not create {directory:?}: {e}"))?;
+    std::fs::create_dir_all(directory)
+        .map_err(|e| format!("could not create {directory:?}: {e}"))?;
     let name = format!(
         "netdiag-{}-{}.pcap",
         if capture.interface.is_empty() {
@@ -876,7 +895,8 @@ fn write_pcap(capture: &Capture, directory: &std::path::Path) -> Result<String, 
     );
     let path = directory.join(name);
 
-    let file = std::fs::File::create(&path).map_err(|e| format!("could not write {path:?}: {e}"))?;
+    let file =
+        std::fs::File::create(&path).map_err(|e| format!("could not write {path:?}: {e}"))?;
     let mut out = std::io::BufWriter::new(file);
     out.write_all(&capture.pcap_header)
         .map_err(|e| e.to_string())?;
