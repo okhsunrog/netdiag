@@ -354,7 +354,9 @@ mod tests {
         assert_eq!(ip(&v4), "192.168.1.1");
 
         let v6 = proto::IpAddress {
-            addr: vec![0x26, 0x06, 0x47, 0, 0x47, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x11, 0x11],
+            addr: vec![
+                0x26, 0x06, 0x47, 0, 0x47, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x11, 0x11,
+            ],
         };
         assert_eq!(ip(&v6), "2606:4700:4700::1111");
     }
@@ -392,7 +394,10 @@ mod tests {
             }],
             ..Default::default()
         };
-        assert_eq!(route_line(&route), "default via 10.77.77.1 dev wlan0 metric 100");
+        assert_eq!(
+            route_line(&route),
+            "default via 10.77.77.1 dev wlan0 metric 100"
+        );
     }
 
     #[test]

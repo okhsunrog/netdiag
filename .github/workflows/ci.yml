@@ -102,3 +102,69 @@ jobs:
         with:
           name: netdiagd-arm64-v8a
           path: slint-app/runtime-libs/arm64-v8a/libnetdiagd.so
+
+  app:
+    name: App
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: slint-app
+
+      # fontconfig and libxkbcommon are what Slint's desktop backend links
+      # against; the app is built for the host here as well as cross-compiled,
+      # because the host build is what runs the tests.
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler libfontconfig-dev libxkbcommon-dev
+
+      # Slint's Android backend compiles its own Java helper with `-source 8`,
+      # which JDK 22 and newer reject outright.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r28c
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Format
+        run: cargo fmt --check
+        working-directory: slint-app
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+        working-directory: slint-app
+
+      # The host build is where the tests live: the socket health rules, the
+      # formatting, and the agreement between the Java shims' vocabulary and the
+      # Rust that translates it. None of them need a device.
+      - name: Test
+        run: cargo test
+        working-directory: slint-app
+
+      # The Android half cannot be tested here, but it can be compiled, and that
+      # is what catches a JNI binding or a shim signature going stale. Slint's
+      # backend picks an android.jar automatically and picks one too old, so the
+      # newest installed platform is chosen explicitly.
+      - name: Android cross-build
+        env:
+          ANDROID_NDK_HOME: ${{ steps.ndk.outputs.ndk-path }}
+        run: |
+          ANDROID_JAR="$(ls -d "$ANDROID_HOME"/platforms/android-*/android.jar | sort -V | tail -1)"
+          echo "using $ANDROID_JAR"
+          ANDROID_JAR="$ANDROID_JAR" cargo ndk -t arm64-v8a -P 31 clippy --lib -- -D warnings
+        working-directory: slint-app

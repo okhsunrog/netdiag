@@ -103,9 +103,8 @@ pub struct AndroidPlatform {
     uid: u32,
     /// Taken once by the timeline. The watcher keeps running for the process
     /// lifetime; there is no reason to stop and restart it per subscription.
-    framework_events: std::sync::Mutex<
-        Option<tokio::sync::mpsc::UnboundedReceiver<proto::NetworkEvent>>,
-    >,
+    framework_events:
+        std::sync::Mutex<Option<tokio::sync::mpsc::UnboundedReceiver<proto::NetworkEvent>>>,
     _watcher: Option<super::watcher::FrameworkWatcherHandle>,
 }
 
@@ -141,10 +140,7 @@ impl AndroidPlatform {
                     value.try_to_string(env)?
                 };
 
-                Ok::<_, jni::errors::Error>((
-                    package_name,
-                    format!("{native_dir}/libnetdiagd.so"),
-                ))
+                Ok::<_, jni::errors::Error>((package_name, format!("{native_dir}/libnetdiagd.so")))
             })
             .map_err(|e| anyhow::anyhow!("could not read the app context: {e}"))?;
 
@@ -187,9 +183,7 @@ impl AndroidPlatform {
 /// `hasCapability`, `getLinkProperties` and its getters, then walking a
 /// `List<InetAddress>` — now happens inside `NetdiagFramework`, in Java, where
 /// the SDK names are symbols the compiler checks.
-fn collect_framework_state(
-    app: &slint::android::AndroidApp,
-) -> Result<String, jni::errors::Error> {
+fn collect_framework_state(app: &slint::android::AndroidApp) -> Result<String, jni::errors::Error> {
     JavaVM::singleton()?.attach_current_thread(|env| {
         let loader = app_class_loader(env, app)?;
         NetdiagFrameworkAPI::get(env, &LoaderContext::Loader(&loader))?;
@@ -225,10 +219,7 @@ fn collect_installed_apps(
     })
 }
 
-pub(super) fn activity_object<'a>(
-    env: &Env<'a>,
-    app: &slint::android::AndroidApp,
-) -> JObject<'a> {
+pub(super) fn activity_object<'a>(env: &Env<'a>, app: &slint::android::AndroidApp) -> JObject<'a> {
     // SAFETY: activity_as_ptr() returns the process's Activity jobject, which
     // stays alive for as long as the app does.
     unsafe { JObject::from_raw(env, app.activity_as_ptr() as *mut _) }
@@ -315,10 +306,8 @@ impl Platform for AndroidPlatform {
         let uid = self.uid;
 
         Box::pin(async move {
-            if netdiag_ipc::client::DaemonClient::probe(
-                netdiag_ipc::client::DEFAULT_SOCKET_NAME,
-            )
-            .await
+            if netdiag_ipc::client::DaemonClient::probe(netdiag_ipc::client::DEFAULT_SOCKET_NAME)
+                .await
             {
                 return Ok(());
             }
@@ -336,9 +325,7 @@ impl Platform for AndroidPlatform {
             // the daemon, and they need different fixes.
             let su = ["/system/bin/su", "/su/bin/su", "su"]
                 .into_iter()
-                .find(|candidate| {
-                    *candidate == "su" || std::path::Path::new(candidate).exists()
-                })
+                .find(|candidate| *candidate == "su" || std::path::Path::new(candidate).exists())
                 .unwrap_or("su");
 
             let status = tokio::process::Command::new(su)
@@ -377,4 +364,3 @@ impl Platform for AndroidPlatform {
         self.framework_events.lock().ok()?.take()
     }
 }
-

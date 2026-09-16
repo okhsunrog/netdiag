@@ -103,222 +103,6 @@ fn parse_package_lines(listing: &str) -> Vec<super::InstalledApp> {
         .collect()
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Read a constant straight out of the Java source.
-    fn declared(name: &str) -> i32 {
-        let java = include_str!("../../java/NetdiagFrameworkWatcher.java");
-        let needle = format!("static final int {name} = ");
-        let line = java
-            .lines()
-            .find(|line| line.contains(&needle))
-            .unwrap_or_else(|| panic!("{name} is not declared in the Java shim"));
-        line.rsplit("= ")
-            .next()
-            .and_then(|value| value.trim().trim_end_matches(';').parse().ok())
-            .unwrap_or_else(|| panic!("could not parse the value of {name}"))
-    }
-
-    /// If someone renumbers the Java constants without updating this table,
-    /// this is what fails — rather than events quietly arriving with the wrong
-    /// label on a device, which is the one failure mode this design has.
-    #[test]
-    fn the_table_matches_the_java_shim() {
-        assert_eq!(declared("KIND_AVAILABLE"), java_kind::AVAILABLE);
-        assert_eq!(declared("KIND_LOST"), java_kind::LOST);
-        assert_eq!(declared("KIND_LOSING"), java_kind::LOSING);
-        assert_eq!(declared("KIND_IPV6_CHANGED"), java_kind::IPV6_CHANGED);
-        assert_eq!(declared("KIND_BLOCKED_CHANGED"), java_kind::BLOCKED_CHANGED);
-        assert_eq!(
-            declared("KIND_VALIDATION_CHANGED"),
-            java_kind::VALIDATION_CHANGED
-        );
-        assert_eq!(declared("KIND_DNS_CHANGED"), java_kind::DNS_CHANGED);
-
-        assert_eq!(declared("SEVERITY_INFO"), java_severity::INFO);
-        assert_eq!(declared("SEVERITY_NOTICE"), java_severity::NOTICE);
-        assert_eq!(declared("SEVERITY_WARNING"), java_severity::WARNING);
-    }
-
-    #[test]
-    fn every_java_kind_maps_to_a_real_wire_value() {
-        for kind in [
-            java_kind::AVAILABLE,
-            java_kind::LOST,
-            java_kind::LOSING,
-            java_kind::IPV6_CHANGED,
-            java_kind::BLOCKED_CHANGED,
-            java_kind::VALIDATION_CHANGED,
-            java_kind::DNS_CHANGED,
-        ] {
-            assert_ne!(
-                event_kind(kind),
-                proto::FrameworkEventKind::Unspecified,
-                "java kind {kind} has no wire mapping"
-            );
-        }
-    }
-
-    #[test]
-    fn an_unknown_value_degrades_instead_of_panicking() {
-        // A shim from the future must not take the app down.
-        assert_eq!(event_kind(9999), proto::FrameworkEventKind::Unspecified);
-        assert_eq!(event_severity(9999), proto::EventSeverity::Info);
-    }
-
-    /// The separators here must be the ones the Java writes.
-    #[test]
-    fn package_separators_match_the_java() {
-        let java = include_str!("../../java/NetdiagPackages.java");
-        assert!(
-            java.contains(r"char FIELD = '\t'"),
-            "NetdiagPackages no longer separates fields with a tab"
-        );
-        assert!(
-            java.contains(r"char RECORD = '\n'"),
-            "NetdiagPackages no longer separates records with a newline"
-        );
-    }
-
-    /// The names the Java emits must be the names this side matches on.
-    #[test]
-    fn capability_names_match_the_java() {
-        let java = include_str!("../../java/NetdiagFramework.java");
-        for name in [
-            "INTERNET", "VALIDATED", "CAPTIVE_PORTAL", "NOT_RESTRICTED", "NOT_METERED",
-            "NOT_ROAMING", "NOT_CONGESTED", "NOT_SUSPENDED", "NOT_VPN", "TRUSTED", "FOREGROUND",
-        ] {
-            assert!(
-                java.contains(&format!("\"{name}\"")),
-                "NetdiagFramework no longer emits {name}, so this side would read it as false"
-            );
-            // And the SDK constant behind it is still named in the Java, which
-            // is what makes javac the thing checking it.
-            assert!(
-                java.contains(&format!("NET_CAPABILITY_{name}")),
-                "{name} is emitted without reference to its SDK constant"
-            );
-        }
-    }
-
-    #[test]
-    fn transport_names_match_the_java() {
-        let java = include_str!("../../java/NetdiagFramework.java");
-        for name in ["CELLULAR", "WIFI", "BLUETOOTH", "ETHERNET", "VPN", "USB"] {
-            assert!(
-                transport(name).is_some(),
-                "{name} has no wire mapping on the Rust side"
-            );
-            assert!(
-                java.contains(&format!("TRANSPORT_{name}")),
-                "NetdiagFramework no longer reports {name}"
-            );
-        }
-    }
-
-    #[test]
-    fn parses_a_framework_snapshot() {
-        let text = "V\t1\t34\t476741369856\t1\n\
-                    N\t476741369856\tWIFI,VPN\tINTERNET,VALIDATED,NOT_METERED\ttun0\t1280\t0\t\texample.com\t1.1.1.1,fd3f::1\n\
-                    N\t455266533376\tCELLULAR\tINTERNET\trmnet16\t1500\t1\tdns.example\t\t8.8.8.8\n";
-        let state = parse_framework_snapshot(text).expect("should parse");
-
-        assert_eq!(state.sdk_int, 34);
-        assert_eq!(state.active_net_id, 111);
-        assert!(state.has_active_network);
-        assert_eq!(state.networks.len(), 2);
-
-        let vpn = &state.networks[0];
-        assert!(vpn.is_default);
-        assert_eq!(
-            vpn.transports,
-            vec![proto::Transport::Wifi as i32, proto::Transport::Vpn as i32]
-        );
-        let caps = vpn.capabilities.as_ref().unwrap();
-        assert!(caps.validated && caps.internet && caps.not_metered);
-        assert!(!caps.not_vpn, "NOT_VPN was absent, so it must read as false");
-
-        let link = vpn.link_properties.as_ref().unwrap();
-        assert_eq!(link.interface_name, "tun0");
-        assert_eq!(link.mtu, 1280);
-        assert_eq!(link.domains, vec!["example.com"]);
-        // 1.1.1.1 as four bytes, fd3f::1 as sixteen.
-        assert_eq!(link.dns_servers.len(), 2);
-        assert_eq!(link.dns_servers[0].addr, vec![1, 1, 1, 1]);
-        assert_eq!(link.dns_servers[1].addr.len(), 16);
-
-        let cell = &state.networks[1];
-        assert!(!cell.is_default);
-        let cell_link = cell.link_properties.as_ref().unwrap();
-        assert_eq!(cell_link.private_dns_server_name, "dns.example");
-        assert_eq!(
-            cell_link.private_dns_mode,
-            proto::PrivateDnsMode::Strict as i32
-        );
-    }
-
-    #[test]
-    fn an_unknown_format_version_is_refused_rather_than_misread() {
-        // Better no framework state — the daemon reports SKIP — than a state
-        // parsed from a layout this build does not understand.
-        assert!(parse_framework_snapshot("V\t2\t34\t0\t0\n").is_none());
-    }
-
-    #[test]
-    fn a_link_local_dns_address_keeps_its_scope_out_of_the_bytes() {
-        let text = "V\t1\t34\t0\t0\nN\t4294967296\t\t\twlan0\t1500\t0\t\t\tfe80::1%wlan0\n";
-        let state = parse_framework_snapshot(text).expect("should parse");
-        let dns = &state.networks[0].link_properties.as_ref().unwrap().dns_servers;
-        assert_eq!(dns.len(), 1, "the scope must not make the address unparseable");
-        assert_eq!(dns[0].addr.len(), 16);
-    }
-
-    #[test]
-    fn parses_a_package_listing() {
-        let apps = parse_packages("10400\t0\tcom.example.shop\tShop\n1000\t1\tandroid\tSystem\n");
-        assert_eq!(apps.len(), 2);
-        assert_eq!(apps[0].uid, 10400);
-        assert_eq!(apps[0].package, "com.example.shop");
-        assert_eq!(apps[0].label, "Shop");
-        assert!(!apps[0].is_system);
-        assert!(apps[1].is_system);
-    }
-
-    #[test]
-    fn user_apps_sort_first_then_by_label_ignoring_case() {
-        let apps = parse_packages(
-            "1\t1\tsys.a\tAaa system\n2\t0\tcom.z\tzebra\n3\t0\tcom.a\tApple\n4\t1\tsys.b\tBbb system\n",
-        );
-        let order: Vec<&str> = apps.iter().map(|a| a.label.as_str()).collect();
-        // "Apple" before "zebra" needs the case-insensitive compare; a plain
-        // sort puts every capital letter ahead of every lowercase one.
-        assert_eq!(order, ["Apple", "zebra", "Aaa system", "Bbb system"]);
-    }
-
-    #[test]
-    fn a_label_may_contain_spaces_and_be_empty() {
-        let apps = parse_packages("101\t0\tcom.a\tSome Long Name\n102\t0\tcom.b\t\n");
-        // Looked up by package, because the result is sorted by label.
-        let find = |package: &str| {
-            apps.iter()
-                .find(|a| a.package == package)
-                .unwrap_or_else(|| panic!("{package} is missing"))
-        };
-        assert_eq!(find("com.a").label, "Some Long Name");
-        // An empty label falls back to something a person can still act on.
-        assert_eq!(find("com.b").label, "com.b");
-    }
-
-    #[test]
-    fn a_broken_line_drops_only_itself() {
-        let apps = parse_packages("not-a-uid\t0\tcom.a\tA\n10\t0\tcom.b\tB\n\n");
-        assert_eq!(apps.len(), 1);
-        assert_eq!(apps[0].package, "com.b");
-    }
-}
-
 // ---- The framework snapshot -------------------------------------------------
 
 /// Parse what `NetdiagFramework.collectNetworkSnapshot()` returns.
@@ -476,4 +260,240 @@ fn ip_address(text: &str) -> Option<proto::IpAddress> {
             std::net::IpAddr::V6(v6) => v6.octets().to_vec(),
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Read a constant straight out of the Java source.
+    fn declared(name: &str) -> i32 {
+        let java = include_str!("../../java/NetdiagFrameworkWatcher.java");
+        let needle = format!("static final int {name} = ");
+        let line = java
+            .lines()
+            .find(|line| line.contains(&needle))
+            .unwrap_or_else(|| panic!("{name} is not declared in the Java shim"));
+        line.rsplit("= ")
+            .next()
+            .and_then(|value| value.trim().trim_end_matches(';').parse().ok())
+            .unwrap_or_else(|| panic!("could not parse the value of {name}"))
+    }
+
+    /// If someone renumbers the Java constants without updating this table,
+    /// this is what fails — rather than events quietly arriving with the wrong
+    /// label on a device, which is the one failure mode this design has.
+    #[test]
+    fn the_table_matches_the_java_shim() {
+        assert_eq!(declared("KIND_AVAILABLE"), java_kind::AVAILABLE);
+        assert_eq!(declared("KIND_LOST"), java_kind::LOST);
+        assert_eq!(declared("KIND_LOSING"), java_kind::LOSING);
+        assert_eq!(declared("KIND_IPV6_CHANGED"), java_kind::IPV6_CHANGED);
+        assert_eq!(declared("KIND_BLOCKED_CHANGED"), java_kind::BLOCKED_CHANGED);
+        assert_eq!(
+            declared("KIND_VALIDATION_CHANGED"),
+            java_kind::VALIDATION_CHANGED
+        );
+        assert_eq!(declared("KIND_DNS_CHANGED"), java_kind::DNS_CHANGED);
+
+        assert_eq!(declared("SEVERITY_INFO"), java_severity::INFO);
+        assert_eq!(declared("SEVERITY_NOTICE"), java_severity::NOTICE);
+        assert_eq!(declared("SEVERITY_WARNING"), java_severity::WARNING);
+    }
+
+    #[test]
+    fn every_java_kind_maps_to_a_real_wire_value() {
+        for kind in [
+            java_kind::AVAILABLE,
+            java_kind::LOST,
+            java_kind::LOSING,
+            java_kind::IPV6_CHANGED,
+            java_kind::BLOCKED_CHANGED,
+            java_kind::VALIDATION_CHANGED,
+            java_kind::DNS_CHANGED,
+        ] {
+            assert_ne!(
+                event_kind(kind),
+                proto::FrameworkEventKind::Unspecified,
+                "java kind {kind} has no wire mapping"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_value_degrades_instead_of_panicking() {
+        // A shim from the future must not take the app down.
+        assert_eq!(event_kind(9999), proto::FrameworkEventKind::Unspecified);
+        assert_eq!(event_severity(9999), proto::EventSeverity::Info);
+    }
+
+    /// The separators here must be the ones the Java writes.
+    #[test]
+    fn package_separators_match_the_java() {
+        let java = include_str!("../../java/NetdiagPackages.java");
+        assert!(
+            java.contains(r"char FIELD = '\t'"),
+            "NetdiagPackages no longer separates fields with a tab"
+        );
+        assert!(
+            java.contains(r"char RECORD = '\n'"),
+            "NetdiagPackages no longer separates records with a newline"
+        );
+    }
+
+    /// The names the Java emits must be the names this side matches on.
+    #[test]
+    fn capability_names_match_the_java() {
+        let java = include_str!("../../java/NetdiagFramework.java");
+        for name in [
+            "INTERNET",
+            "VALIDATED",
+            "CAPTIVE_PORTAL",
+            "NOT_RESTRICTED",
+            "NOT_METERED",
+            "NOT_ROAMING",
+            "NOT_CONGESTED",
+            "NOT_SUSPENDED",
+            "NOT_VPN",
+            "TRUSTED",
+            "FOREGROUND",
+        ] {
+            assert!(
+                java.contains(&format!("\"{name}\"")),
+                "NetdiagFramework no longer emits {name}, so this side would read it as false"
+            );
+            // And the SDK constant behind it is still named in the Java, which
+            // is what makes javac the thing checking it.
+            assert!(
+                java.contains(&format!("NET_CAPABILITY_{name}")),
+                "{name} is emitted without reference to its SDK constant"
+            );
+        }
+    }
+
+    #[test]
+    fn transport_names_match_the_java() {
+        let java = include_str!("../../java/NetdiagFramework.java");
+        for name in ["CELLULAR", "WIFI", "BLUETOOTH", "ETHERNET", "VPN", "USB"] {
+            assert!(
+                transport(name).is_some(),
+                "{name} has no wire mapping on the Rust side"
+            );
+            assert!(
+                java.contains(&format!("TRANSPORT_{name}")),
+                "NetdiagFramework no longer reports {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_a_framework_snapshot() {
+        let text = "V\t1\t34\t476741369856\t1\n\
+                    N\t476741369856\tWIFI,VPN\tINTERNET,VALIDATED,NOT_METERED\ttun0\t1280\t0\t\texample.com\t1.1.1.1,fd3f::1\n\
+                    N\t455266533376\tCELLULAR\tINTERNET\trmnet16\t1500\t1\tdns.example\t\t8.8.8.8\n";
+        let state = parse_framework_snapshot(text).expect("should parse");
+
+        assert_eq!(state.sdk_int, 34);
+        assert_eq!(state.active_net_id, 111);
+        assert!(state.has_active_network);
+        assert_eq!(state.networks.len(), 2);
+
+        let vpn = &state.networks[0];
+        assert!(vpn.is_default);
+        assert_eq!(
+            vpn.transports,
+            vec![proto::Transport::Wifi as i32, proto::Transport::Vpn as i32]
+        );
+        let caps = vpn.capabilities.as_ref().unwrap();
+        assert!(caps.validated && caps.internet && caps.not_metered);
+        assert!(
+            !caps.not_vpn,
+            "NOT_VPN was absent, so it must read as false"
+        );
+
+        let link = vpn.link_properties.as_ref().unwrap();
+        assert_eq!(link.interface_name, "tun0");
+        assert_eq!(link.mtu, 1280);
+        assert_eq!(link.domains, vec!["example.com"]);
+        // 1.1.1.1 as four bytes, fd3f::1 as sixteen.
+        assert_eq!(link.dns_servers.len(), 2);
+        assert_eq!(link.dns_servers[0].addr, vec![1, 1, 1, 1]);
+        assert_eq!(link.dns_servers[1].addr.len(), 16);
+
+        let cell = &state.networks[1];
+        assert!(!cell.is_default);
+        let cell_link = cell.link_properties.as_ref().unwrap();
+        assert_eq!(cell_link.private_dns_server_name, "dns.example");
+        assert_eq!(
+            cell_link.private_dns_mode,
+            proto::PrivateDnsMode::Strict as i32
+        );
+    }
+
+    #[test]
+    fn an_unknown_format_version_is_refused_rather_than_misread() {
+        // Better no framework state — the daemon reports SKIP — than a state
+        // parsed from a layout this build does not understand.
+        assert!(parse_framework_snapshot("V\t2\t34\t0\t0\n").is_none());
+    }
+
+    #[test]
+    fn a_link_local_dns_address_keeps_its_scope_out_of_the_bytes() {
+        let text = "V\t1\t34\t0\t0\nN\t4294967296\t\t\twlan0\t1500\t0\t\t\tfe80::1%wlan0\n";
+        let state = parse_framework_snapshot(text).expect("should parse");
+        let dns = &state.networks[0]
+            .link_properties
+            .as_ref()
+            .unwrap()
+            .dns_servers;
+        assert_eq!(
+            dns.len(),
+            1,
+            "the scope must not make the address unparseable"
+        );
+        assert_eq!(dns[0].addr.len(), 16);
+    }
+
+    #[test]
+    fn parses_a_package_listing() {
+        let apps = parse_packages("10400\t0\tcom.example.shop\tShop\n1000\t1\tandroid\tSystem\n");
+        assert_eq!(apps.len(), 2);
+        assert_eq!(apps[0].uid, 10400);
+        assert_eq!(apps[0].package, "com.example.shop");
+        assert_eq!(apps[0].label, "Shop");
+        assert!(!apps[0].is_system);
+        assert!(apps[1].is_system);
+    }
+
+    #[test]
+    fn user_apps_sort_first_then_by_label_ignoring_case() {
+        let apps = parse_packages(
+            "1\t1\tsys.a\tAaa system\n2\t0\tcom.z\tzebra\n3\t0\tcom.a\tApple\n4\t1\tsys.b\tBbb system\n",
+        );
+        let order: Vec<&str> = apps.iter().map(|a| a.label.as_str()).collect();
+        // "Apple" before "zebra" needs the case-insensitive compare; a plain
+        // sort puts every capital letter ahead of every lowercase one.
+        assert_eq!(order, ["Apple", "zebra", "Aaa system", "Bbb system"]);
+    }
+
+    #[test]
+    fn a_label_may_contain_spaces_and_be_empty() {
+        let apps = parse_packages("101\t0\tcom.a\tSome Long Name\n102\t0\tcom.b\t\n");
+        // Looked up by package, because the result is sorted by label.
+        let find = |package: &str| {
+            apps.iter()
+                .find(|a| a.package == package)
+                .unwrap_or_else(|| panic!("{package} is missing"))
+        };
+        assert_eq!(find("com.a").label, "Some Long Name");
+        // An empty label falls back to something a person can still act on.
+        assert_eq!(find("com.b").label, "com.b");
+    }
+
+    #[test]
+    fn a_broken_line_drops_only_itself() {
+        let apps = parse_packages("not-a-uid\t0\tcom.a\tA\n10\t0\tcom.b\tB\n\n");
+        assert_eq!(apps.len(), 1);
+        assert_eq!(apps[0].package, "com.b");
+    }
 }

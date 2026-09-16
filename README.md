@@ -242,9 +242,15 @@ adb shell 'su -c "/data/local/tmp/netdiagd --self-test"'
 ### Tests
 
 ```sh
-cargo test --workspace           # 128 unit tests, no device needed
+cargo test --workspace           # 128 daemon tests, no device needed
+cd slint-app && cargo test       # 32 app tests, no device needed
 cd proto && buf lint && buf breaking --against '../.git#branch=main,subdir=proto'
 ```
+
+CI runs both, plus `clippy -D warnings` for the host and for
+`aarch64-linux-android`. The cross-build is what catches a JNI binding or a Java
+shim signature going stale: the Android half cannot be tested on a runner, but
+it can be compiled.
 
 The app is a separate cargo workspace, because it tracks Slint's master branch
 and that should not sit in the daemon's dependency graph. `cargo test` there

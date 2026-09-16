@@ -44,7 +44,9 @@ pub trait Platform: Send + Sync + 'static {
     /// `None` off Android: there is no `ConnectivityManager` to watch, and the
     /// timeline then shows kernel events only rather than inventing any.
     /// Returns the receiver once; later calls give `None`.
-    fn take_framework_events(&self) -> Option<tokio::sync::mpsc::UnboundedReceiver<proto::NetworkEvent>> {
+    fn take_framework_events(
+        &self,
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<proto::NetworkEvent>> {
         None
     }
 

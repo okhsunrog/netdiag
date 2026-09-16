@@ -146,8 +146,13 @@ impl Drop for FrameworkWatcherHandle {
 /// Load the Java class, register the event sink, and start watching.
 pub fn install(
     app: &slint::android::AndroidApp,
-) -> Result<(mpsc::UnboundedReceiver<proto::NetworkEvent>, FrameworkWatcherHandle), jni::errors::Error>
-{
+) -> Result<
+    (
+        mpsc::UnboundedReceiver<proto::NetworkEvent>,
+        FrameworkWatcherHandle,
+    ),
+    jni::errors::Error,
+> {
     // Touch the const so the exported symbol is definitely kept.
     let _ = &ON_FRAMEWORK_EVENT;
 
@@ -183,5 +188,3 @@ pub fn install(
     debug!("framework watcher installed");
     Ok((rx, FrameworkWatcherHandle { watcher }))
 }
-
-
