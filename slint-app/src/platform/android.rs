@@ -32,6 +32,9 @@ use tracing::{debug, warn};
 
 use super::{InstalledApp, Platform, StartFuture};
 
+/// How long the daemon keeps listening after the last client disconnects.
+const DAEMON_IDLE_TIMEOUT_SECS: u32 = 300;
+
 bind_java_type! {
     Context => android.content.Context,
     // Types bound by a different `bind_java_type!` invocation are invisible to
@@ -312,9 +315,15 @@ impl Platform for AndroidPlatform {
                 return Ok(());
             }
 
+            // --exit-when-idle matters more here than anywhere else: this is a
+            // root process that can read every socket on the device, and
+            // nothing else would ever stop it. Five minutes is long enough to
+            // survive the app being backgrounded and come back to a warm
+            // daemon, and short enough that closing the app does not leave one
+            // listening until the phone reboots.
             let command = format!(
                 "nohup '{}' --socket @netdiag --allow-uid {uid} --expect-package '{}' \
-                 >/dev/null 2>&1 &",
+                 --exit-when-idle {DAEMON_IDLE_TIMEOUT_SECS} >/dev/null 2>&1 &",
                 path.replace('\'', "'\\''"),
                 package.replace('\'', "'\\''"),
             );

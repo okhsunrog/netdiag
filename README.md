@@ -239,6 +239,19 @@ adb push daemon/target/aarch64-linux-android/release/netdiagd /data/local/tmp/
 adb shell 'su -c "/data/local/tmp/netdiagd --self-test"'
 ```
 
+### How long the daemon lives
+
+It runs as root and can read every socket on the device, so it should not
+outlive the reason it was started. The app passes `--exit-when-idle 300` when it
+launches one through `su`: five minutes is long enough to survive being
+backgrounded and come back to a warm daemon, and short enough that closing the
+app does not leave one listening until the phone reboots. It also covers the
+case that matters most — started through `su`, and the app died before it ever
+connected.
+
+The flag is off by default, because a daemon started by hand has someone
+watching it, and a five-minute window to attach a client would be a trap.
+
 ### Tests
 
 ```sh

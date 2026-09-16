@@ -45,6 +45,9 @@ struct Args {
     socket_owner: Option<u32>,
     log_filter: String,
     self_test: bool,
+    /// Exit after this long with no client connected. `None` means run until
+    /// killed, which is the right default for a daemon started by hand.
+    exit_when_idle: Option<std::time::Duration>,
 }
 
 fn usage() -> &'static str {
@@ -66,6 +69,9 @@ OPTIONS:
                           PKG (its /proc/<pid>/cmdline). Advisory: the uid
                           check is what actually grants access.
     --log <FILTER>        Tracing filter (default: info).
+    --exit-when-idle <S>  Exit after S seconds with no client connected, and
+                          also if no client ever connects. 0 disables it.
+                          Off by default: a daemon started by hand should stay.
     --self-test           Collect a snapshot, print a summary, and exit.
     --version             Print the version and exit.
     -h, --help            Print this help and exit.
@@ -86,6 +92,7 @@ fn parse_args() -> Result<Option<Args>> {
     let mut socket_owner: Option<u32> = None;
     let mut log_filter = "info".to_string();
     let mut self_test = false;
+    let mut exit_when_idle = None;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
@@ -118,6 +125,14 @@ fn parse_args() -> Result<Option<Args>> {
             "--log" => {
                 log_filter = args.next().context("--log needs a value")?;
             }
+            "--exit-when-idle" => {
+                let value = args.next().context("--exit-when-idle needs a value")?;
+                let seconds: u64 = value
+                    .parse()
+                    .with_context(|| format!("--exit-when-idle: '{value}' is not a number"))?;
+                // 0 disables it, so a wrapper can pass the flag unconditionally.
+                exit_when_idle = (seconds > 0).then(|| std::time::Duration::from_secs(seconds));
+            }
             "--self-test" => self_test = true,
             other => {
                 anyhow::bail!("unknown argument '{other}'; try --help");
@@ -134,6 +149,7 @@ fn parse_args() -> Result<Option<Args>> {
         socket_owner,
         log_filter,
         self_test,
+        exit_when_idle,
     }))
 }
 
@@ -209,8 +225,41 @@ async fn run(args: Args) -> Result<()> {
     let address = args.socket.clone();
     let policy = Arc::new(args.policy);
 
+    // Sessions currently being served, and a nudge when that count changes.
+    //
+    // This process runs as root and can read every socket on the device, so how
+    // long it lives should be a decision rather than "until the phone reboots".
+    // The app passes --exit-when-idle when it starts one through su; a daemon
+    // started by hand gets no timeout, because someone is watching it.
+    let live_sessions = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let session_ended = Arc::new(tokio::sync::Notify::new());
+    if let Some(timeout) = args.exit_when_idle {
+        info!("will exit after {}s with no client", timeout.as_secs());
+    }
+
     loop {
+        // Armed only while nothing is connected, so a long Diagnose or a live
+        // WatchNetwork never trips it. Re-evaluated on every pass, which is why
+        // a session ending has to wake the loop up.
+        let idle_timeout = args
+            .exit_when_idle
+            .filter(|_| live_sessions.load(std::sync::atomic::Ordering::SeqCst) == 0);
+
         tokio::select! {
+            // No client has been connected for the whole timeout. This also
+            // covers the case that matters most: started through su, and the
+            // app died before it ever connected.
+            _ = tokio::time::sleep(idle_timeout.unwrap_or_default()), if idle_timeout.is_some() => {
+                info!(
+                    "no client for {}s, exiting",
+                    idle_timeout.unwrap_or_default().as_secs()
+                );
+                break;
+            }
+
+            // A session finished: re-arm the timer above.
+            _ = session_ended.notified() => {}
+
             accepted = listener.accept() => {
                 let (stream, _addr) = match accepted {
                     Ok(pair) => pair,
@@ -232,10 +281,15 @@ async fn run(args: Args) -> Result<()> {
 
                 info!("accepted a connection from {peer}");
                 let daemon = daemon.clone();
+                let live = live_sessions.clone();
+                let ended = session_ended.clone();
+                live.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 tokio::spawn(async move {
                     if let Err(e) = ipc::session::serve(stream, peer, daemon).await {
                         warn!("session ended with an error: {e}");
                     }
+                    live.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                    ended.notify_one();
                 });
             }
             _ = tokio::signal::ctrl_c() => {
