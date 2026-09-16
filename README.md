@@ -265,8 +265,8 @@ CI runs both, plus `clippy -D warnings` for the host and for
 shim signature going stale: the Android half cannot be tested on a runner, but
 it can be compiled.
 
-The app is a separate cargo workspace, because it tracks Slint's master branch
-and that should not sit in the daemon's dependency graph. `cargo test` there
+The app is a separate cargo workspace, so the daemon does not have to build
+Slint and Skia to compile a netlink parser. `cargo test` there
 covers the formatting, the socket filters, and the agreement between the Java
 shim's constants and the Rust table that maps them.
 

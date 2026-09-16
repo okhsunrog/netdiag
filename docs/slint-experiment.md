@@ -7,20 +7,28 @@ what that actually cost and bought.
 
 [Slint]: https://slint.dev
 
-Built against Slint from git (1.18.0-unreleased), because `FlexboxLayout` and
-the per-item `cross-axis-self-alignment` property are in no release yet — the
-newest is 1.17.1. It worked against `bf511bc` and again against `9405a2df`, so
-it does not depend on one exact revision, but the manifest now **pins** that
-revision rather than following `master`.
+Built against **Slint 1.18**, an ordinary release. For most of this experiment
+it was not: `FlexboxLayout` was unreleased, so the app tracked Slint's `master`
+branch — first loosely, then pinned to `9405a2df`. 1.18 shipped it and the
+dependency is now `slint = "1.18"`.
 
-The lockfile pinned it either way; what a branch leaves open is that `cargo
-update` moves the app onto a different commit of someone else's main branch
-without anyone deciding to. With a `rev` that becomes a commit that says so.
-Once 1.18 ships this becomes an ordinary version requirement.
+The upgrade from that revision to the release was uneventful except for one
+thing, and it is the kind of thing only a running app shows. The default
+**widget style changed**, and every `std-widgets` `Button` came back light grey
+on a near-black window. Nothing in the app had changed; it had been relying on
+whatever the default happened to be. The style is now pinned in `build.rs`:
 
-`slint-app/` is deliberately **its own cargo workspace**. A dependency on a git
-revision of someone's development branch should not sit in the daemon's
-dependency graph, and the daemon's CI should never have to fetch it.
+```rust
+let config = slint_build::CompilerConfiguration::new().with_style("fluent-dark".to_string());
+```
+
+Worth keeping as a rule rather than a fix: an app that draws its own palette
+should say which widget style it expects, because the default is not part of
+anyone's compatibility promise.
+
+`slint-app/` is deliberately **its own cargo workspace**. The daemon should not
+have to build Slint and Skia to compile a netlink parser, and its CI should not
+have to fetch them.
 
 The APK is built with [`cargo-rapk`], which unlike `cargo-apk` compiles this
 app's Java into the APK:
