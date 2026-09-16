@@ -508,7 +508,9 @@ component AppsScreen inherits VerticalLayout {
 
 component TimelineScreen inherits VerticalLayout {
     in property <[EventRow]> events;
+    in property <bool> watching-sockets;
     callback clear-events();
+    callback toggle-socket-watch();
 
     padding: 12px;
     spacing: 8px;
@@ -521,6 +523,15 @@ component TimelineScreen inherits VerticalLayout {
             font-size: 12px;
             vertical-alignment: center;
             horizontal-stretch: 1;
+        }
+        // Off by default, and it starts the subscription rather than filtering
+        // one that is always running: sockets churn constantly, so watching
+        // them costs the daemon an inet_diag dump every second and would bury
+        // the route and framework events this screen exists to line up.
+        FilterChip {
+            label: "Sockets";
+            active: root.watching-sockets;
+            toggled => { root.toggle-socket-watch(); }
         }
         Button {
             text: "Clear";
@@ -799,6 +810,7 @@ export component App inherits Window {
     in property <[AppRow]> apps;
     in property <AppDetailData> app-detail;
     in property <[EventRow]> events;
+    in property <bool> watching-sockets;
     in-out property <string> app-filter;
 
     in property <SocketsData> sockets;
@@ -819,6 +831,7 @@ export component App inherits Window {
     callback select-app(int);
     callback clear-app();
     callback clear-events();
+    callback toggle-socket-watch();
     callback filter-changed(string);
     callback sockets-filter-changed();
     callback toggle-socket(int);
@@ -957,7 +970,9 @@ export component App inherits Window {
             }
             if root.tab == 6: TimelineScreen {
                 events: root.events;
+                watching-sockets: root.watching-sockets;
                 clear-events => { root.clear-events(); }
+                toggle-socket-watch => { root.toggle-socket-watch(); }
             }
         }
 

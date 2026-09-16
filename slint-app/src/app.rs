@@ -62,6 +62,10 @@ pub struct AppState {
     /// round trip to the daemon.
     snapshot: Mutex<Option<proto::Snapshot>>,
     capture: Mutex<Capture>,
+    /// Stream id of the socket watch, when one is running. Kept so the toggle
+    /// can cancel it on the daemon side instead of leaving it dumping
+    /// inet_diag into a receiver nobody reads.
+    socket_watch: Mutex<Option<u64>>,
 }
 
 impl AppState {
@@ -79,6 +83,7 @@ impl AppState {
             filtered: Mutex::new(Vec::new()),
             snapshot: Mutex::new(None),
             capture: Mutex::new(Capture::default()),
+            socket_watch: Mutex::new(None),
         }))
     }
 
@@ -139,7 +144,7 @@ pub fn wire(app: &ui::App, state: Arc<AppState>) {
     wire_sockets(app, &state);
     wire_capture(app, &state);
     wire_toggles(app);
-    wire_timeline(app);
+    wire_timeline(app, &state);
 }
 
 fn wire_connect(app: &ui::App, state: &Arc<AppState>) {
@@ -507,12 +512,83 @@ fn wire_toggles(app: &ui::App) {
     });
 }
 
-fn wire_timeline(app: &ui::App) {
+fn wire_timeline(app: &ui::App, state: &Arc<AppState>) {
     let weak = app.as_weak();
     app.on_clear_events(move || {
         if let Some(app) = weak.upgrade() {
             app.set_events(model(Vec::<ui::EventRow>::new()));
         }
+    });
+
+    let weak = app.as_weak();
+    let state = state.clone();
+    app.on_toggle_socket_watch(move || {
+        let Some(app) = weak.upgrade() else { return };
+        let Some(client) = state.client() else { return };
+
+        // Whatever is running now is cancelled either way: turning the toggle
+        // off stops it, and turning it on after a reconnect must not leave the
+        // previous subscription behind.
+        let running = state
+            .socket_watch
+            .lock()
+            .ok()
+            .and_then(|mut slot| slot.take());
+        if let Some(id) = running {
+            let client = client.clone();
+            state
+                .runtime
+                .clone_handle()
+                .spawn(async move { client.cancel(id).await });
+        }
+
+        let wanted = !app.get_watching_sockets();
+        app.set_watching_sockets(wanted);
+        if !wanted {
+            return;
+        }
+
+        let weak = app.as_weak();
+        let state = state.clone();
+        state.clone().runtime.clone_handle().spawn(async move {
+            // No filter and the daemon's own poll interval: the point of the
+            // toggle is that the user asked for everything.
+            let stream = client
+                .stream(proto::client_frame::Body::WatchSockets(
+                    proto::WatchSocketsRequest::default(),
+                ))
+                .await;
+
+            let (id, mut rx) = match stream {
+                Ok(stream) => stream,
+                Err(e) => {
+                    on_ui(weak, format!("{e:#}"), |app, message| {
+                        app.set_watching_sockets(false);
+                        app.set_connect_error(shared(message));
+                    });
+                    return;
+                }
+            };
+            if let Ok(mut slot) = state.socket_watch.lock() {
+                *slot = Some(id);
+            }
+
+            while let Some(frame) = rx.recv().await {
+                let Some(proto::server_frame::Body::Event(event)) = frame.body else {
+                    continue;
+                };
+                on_ui(weak.clone(), event, |app, event| {
+                    push_event(app, view::event_row(&event));
+                });
+            }
+
+            // The stream can also end because the daemon stopped or the
+            // connection dropped, so the chip is cleared either way.
+            if let Ok(mut slot) = state.socket_watch.lock() {
+                *slot = None;
+            }
+            on_ui(weak, (), |app, ()| app.set_watching_sockets(false));
+        });
     });
 }
 

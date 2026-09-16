@@ -674,9 +674,19 @@ pub fn event_row(event: &proto::NetworkEvent) -> ui::EventRow {
     let severity =
         proto::EventSeverity::try_from(event.severity).unwrap_or(proto::EventSeverity::Unspecified);
 
+    // Socket events are kernel events, but labelling them KRNL alongside route
+    // and address changes makes the timeline unreadable once the watch is on.
+    // The distinction is in the payload, so it is drawn from there rather than
+    // by adding a wire value for something only the display cares about.
+    let is_socket = matches!(
+        event.payload,
+        Some(proto::network_event::Payload::Socket(_))
+    );
+
     ui::EventRow {
         time: shared(time_of_day(event.unix_ms)),
         source: shared(match source {
+            proto::EventSource::Kernel if is_socket => "SOCK",
             proto::EventSource::Kernel => "KRNL",
             proto::EventSource::Framework => "FMWK",
             proto::EventSource::Daemon => "DMON",
@@ -1201,6 +1211,27 @@ mod tests {
             ..info
         };
         assert!(health_line(&established(long), &long).contains("silent 10 min"));
+    }
+
+    #[test]
+    fn socket_events_are_labelled_apart_from_other_kernel_events() {
+        let kernel = proto::NetworkEvent {
+            source: proto::EventSource::Kernel as i32,
+            summary: "route added".into(),
+            ..Default::default()
+        };
+        assert_eq!(event_row(&kernel).source, "KRNL");
+
+        // Same source, different payload: the timeline is unreadable if a
+        // socket appearing looks like a route changing.
+        let socket = proto::NetworkEvent {
+            source: proto::EventSource::Kernel as i32,
+            payload: Some(proto::network_event::Payload::Socket(
+                proto::SocketEvent::default(),
+            )),
+            ..Default::default()
+        };
+        assert_eq!(event_row(&socket).source, "SOCK");
     }
 
     #[test]

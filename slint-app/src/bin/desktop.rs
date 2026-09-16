@@ -31,6 +31,7 @@ struct Args {
     diagnose: bool,
     capture: Option<String>,
     save_capture: bool,
+    watch_sockets: bool,
 }
 
 fn parse_args() -> Args {
@@ -42,6 +43,7 @@ fn parse_args() -> Args {
         diagnose: false,
         capture: None,
         save_capture: false,
+        watch_sockets: false,
     };
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
@@ -57,6 +59,7 @@ fn parse_args() -> Args {
             "--diagnose" => args.diagnose = true,
             "--capture" => args.capture = argv.next(),
             "--save-capture" => args.save_capture = true,
+            "--watch-sockets" => args.watch_sockets = true,
             "--settle-ms" => {
                 args.settle_ms = argv
                     .next()
@@ -66,7 +69,7 @@ fn parse_args() -> Args {
             "-h" | "--help" => {
                 println!(
                     "netdiag-slint-desktop [--connect] [--tab N] [--snapshot FILE] [--settle-ms MS]\n\
-                     \t[--diagnose] [--capture IFACE] [--save-capture]\n\n\
+                     \t[--diagnose] [--capture IFACE] [--save-capture] [--watch-sockets]\n\n\
                      Runs the Slint UI against a daemon on this machine.\n\
                      Tabs: 0 overview, 1 diagnose, 2 routing, 3 apps, 4 timeline\n\
                      --snapshot FILE renders the window to a PNG and exits."
@@ -140,6 +143,20 @@ fn main() -> anyhow::Result<()> {
             move || {
                 if let Some(window) = weak.upgrade() {
                     window.invoke_save_capture();
+                }
+            },
+        );
+    }
+
+    if args.watch_sockets {
+        let weak = window.as_weak();
+        let timer = Box::leak(Box::new(slint::Timer::default()));
+        timer.start(
+            slint::TimerMode::SingleShot,
+            std::time::Duration::from_millis(1500),
+            move || {
+                if let Some(window) = weak.upgrade() {
+                    window.invoke_toggle_socket_watch();
                 }
             },
         );
