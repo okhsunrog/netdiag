@@ -52,6 +52,13 @@ struct Capture {
     stream_id: Option<u64>,
 }
 
+#[derive(Default)]
+struct QualityRun {
+    generation: u64,
+    stream_id: Option<u64>,
+    cancel_requested: bool,
+}
+
 pub struct AppState {
     pub runtime: Runtime,
     pub platform: Arc<dyn Platform>,
@@ -62,6 +69,7 @@ pub struct AppState {
     /// round trip to the daemon.
     snapshot: Mutex<Option<proto::Snapshot>>,
     capture: Mutex<Capture>,
+    quality: Mutex<QualityRun>,
     /// Stream id of the socket watch, when one is running. Kept so the toggle
     /// can cancel it on the daemon side instead of leaving it dumping
     /// inet_diag into a receiver nobody reads.
@@ -83,6 +91,7 @@ impl AppState {
             filtered: Mutex::new(Vec::new()),
             snapshot: Mutex::new(None),
             capture: Mutex::new(Capture::default()),
+            quality: Mutex::new(QualityRun::default()),
             socket_watch: Mutex::new(None),
         }))
     }
@@ -135,11 +144,13 @@ pub fn wire(app: &ui::App, state: Arc<AppState>) {
     app.set_app_detail(view::empty_app_detail());
     app.set_sockets(view::empty_sockets());
     app.set_capture(view::empty_capture());
+    app.set_quality(ui::QualityData::default());
     app.set_status_line(shared(state.platform.describe()));
 
     wire_connect(app, &state);
     wire_refresh(app, &state);
     wire_diagnose(app, &state);
+    wire_quality(app, &state);
     wire_apps(app, &state);
     wire_sockets(app, &state);
     wire_capture(app, &state);
@@ -342,6 +353,253 @@ fn wire_diagnose(app: &ui::App, state: &Arc<AppState>) {
             }
         });
     });
+}
+
+fn wire_quality(app: &ui::App, state: &Arc<AppState>) {
+    let weak = app.as_weak();
+    let start_state = state.clone();
+    app.on_start_quality(move || {
+        let Some(app) = weak.upgrade() else { return };
+        let Some(client) = start_state.client() else {
+            return;
+        };
+        if !client
+            .hello()
+            .capabilities
+            .as_ref()
+            .is_some_and(|caps| caps.network_quality)
+        {
+            app.set_quality(ui::QualityData {
+                error: shared("The running daemon does not support network quality. Restart it with the current app build."),
+                ..Default::default()
+            });
+            return;
+        }
+        let android = start_state.platform.framework_state();
+        let net_id = match android {
+            Some(ref state) if state.has_active_network && state.active_net_id > 0 => {
+                state.active_net_id
+            }
+            Some(_) => {
+                app.set_quality(ui::QualityData {
+                    error: shared("Android reports no active network"),
+                    ..Default::default()
+                });
+                return;
+            }
+            None => 0, // Desktop harness: the daemon's default route.
+        };
+        let generation = {
+            let Ok(mut run) = start_state.quality.lock() else {
+                return;
+            };
+            run.generation += 1;
+            run.stream_id = None;
+            run.cancel_requested = false;
+            run.generation
+        };
+        app.set_quality(ui::QualityData {
+            running: true,
+            network: shared(if net_id == 0 {
+                "Default route".to_string()
+            } else {
+                format!("Android netId {net_id}")
+            }),
+            phase: shared("Starting…"),
+            ..Default::default()
+        });
+
+        let state = start_state.clone();
+        let weak = app.as_weak();
+        start_state.runtime.clone_handle().spawn(async move {
+            let stream = client
+                .stream(proto::client_frame::Body::NetworkQuality(
+                    proto::NetworkQualityRequest { net_id },
+                ))
+                .await;
+            let (id, mut rx) = match stream {
+                Ok(stream) => stream,
+                Err(error) => {
+                    let state = state.clone();
+                    on_ui(weak, format!("{error:#}"), move |app, message| {
+                        if quality_is_current(&state, generation) {
+                            app.set_quality(ui::QualityData {
+                                running: false,
+                                error: shared(message),
+                                ..app.get_quality()
+                            });
+                        }
+                    });
+                    return;
+                }
+            };
+            let cancel_now = {
+                let Ok(mut run) = state.quality.lock() else {
+                    return;
+                };
+                if run.generation != generation || run.cancel_requested {
+                    true
+                } else {
+                    run.stream_id = Some(id);
+                    false
+                }
+            };
+            if cancel_now {
+                let _ = client.cancel(id).await;
+                let state = state.clone();
+                on_ui(weak, (), move |app, ()| {
+                    if state.quality.lock().is_ok_and(|run| run.generation == generation && run.cancel_requested) {
+                        app.set_quality(ui::QualityData {
+                            phase: shared("Cancelled"),
+                            ..app.get_quality()
+                        });
+                    }
+                });
+                return;
+            }
+
+            let mut got_result = false;
+            let mut got_error = false;
+            while let Some(frame) = rx.recv().await {
+                let Some(proto::server_frame::Body::NetworkQuality(progress)) = frame.body else {
+                    continue;
+                };
+                match progress.payload {
+                    Some(proto::network_quality_progress::Payload::Phase(phase)) => {
+                        let state = state.clone();
+                        on_ui(weak.clone(), phase, move |app, phase| {
+                            if quality_is_current(&state, generation) {
+                                app.set_quality(ui::QualityData {
+                                    phase: shared(phase),
+                                    ..app.get_quality()
+                                });
+                            }
+                        });
+                    }
+                    Some(proto::network_quality_progress::Payload::Result(result)) => {
+                        got_result = true;
+                        let state = state.clone();
+                        on_ui(weak.clone(), result, move |app, result| {
+                            if quality_is_current(&state, generation) {
+                                app.set_quality(quality_result(&result, app.get_quality()));
+                            }
+                        });
+                    }
+                    Some(proto::network_quality_progress::Payload::Error(error)) => {
+                        got_error = true;
+                        let state = state.clone();
+                        on_ui(weak.clone(), error, move |app, error| {
+                            if quality_is_current(&state, generation) {
+                                app.set_quality(ui::QualityData {
+                                    error: shared(error),
+                                    ..app.get_quality()
+                                });
+                            }
+                        });
+                    }
+                    None => {}
+                }
+            }
+            let cancelled = {
+                let Ok(mut run) = state.quality.lock() else {
+                    return;
+                };
+                if run.generation != generation {
+                    return;
+                }
+                run.stream_id = None;
+                run.cancel_requested
+            };
+            let state = state.clone();
+            on_ui(
+                weak,
+                (got_result, got_error, cancelled),
+                move |app, (got_result, got_error, cancelled)| {
+                    if !state.quality.lock().is_ok_and(|run| run.generation == generation) {
+                        return;
+                    }
+                    let current = app.get_quality();
+                    app.set_quality(ui::QualityData {
+                        running: false,
+                        phase: shared(if cancelled {
+                            "Cancelled"
+                        } else if got_result {
+                            "Complete"
+                        } else {
+                            ""
+                        }),
+                        error: if !got_result && !got_error && !cancelled {
+                            shared("The quality test ended without a result")
+                        } else {
+                            current.error.clone()
+                        },
+                        ..current
+                    });
+                },
+            );
+        });
+    });
+
+    let weak = app.as_weak();
+    let stop_state = state.clone();
+    app.on_stop_quality(move || {
+        let Some(app) = weak.upgrade() else { return };
+        let id = {
+            let Ok(mut run) = stop_state.quality.lock() else {
+                return;
+            };
+            run.cancel_requested = true;
+            run.stream_id
+        };
+        app.set_quality(ui::QualityData {
+            running: false,
+            phase: shared("Cancelling…"),
+            ..app.get_quality()
+        });
+        if let Some(id) = id
+            && let Some(client) = stop_state.client()
+        {
+            stop_state.runtime.clone_handle().spawn(async move {
+                let _ = client.cancel(id).await;
+            });
+        }
+    });
+}
+
+fn quality_is_current(state: &AppState, generation: u64) -> bool {
+    state
+        .quality
+        .lock()
+        .is_ok_and(|run| run.generation == generation && !run.cancel_requested)
+}
+
+fn quality_result(result: &proto::NetworkQualityResult, old: ui::QualityData) -> ui::QualityData {
+    fn leg(leg: Option<&proto::NetworkQualityLeg>) -> String {
+        let Some(leg) = leg else {
+            return "No measurement".to_string();
+        };
+        let degraded = if leg.failed_connections > 0 {
+            format!(" · {} failed flows; unreliable", leg.failed_connections)
+        } else {
+            String::new()
+        };
+        format!(
+            "{:.1} Mbps · {:.0} ms loaded · {:.0} RPM{}",
+            leg.throughput_bps / 1_000_000.0,
+            leg.loaded_latency_ms,
+            leg.rpm,
+            degraded
+        )
+    }
+    ui::QualityData {
+        idle: shared(format!(
+            "{:.0} ms latency · {:.0} ms jitter",
+            result.unloaded_latency_ms, result.jitter_ms
+        )),
+        download: shared(leg(result.download.as_ref())),
+        upload: shared(leg(result.upload.as_ref())),
+        ..old
+    }
 }
 
 /// Replace-or-append: a check is streamed once and then restated in the final

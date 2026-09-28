@@ -17,6 +17,7 @@ fn main() {
         "netdiag/v1/event.proto",
         "netdiag/v1/diag.proto",
         "netdiag/v1/capture.proto",
+        "netdiag/v1/quality.proto",
         "netdiag/v1/service.proto",
     ];
 

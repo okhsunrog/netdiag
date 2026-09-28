@@ -32,6 +32,7 @@ struct Args {
     capture: Option<String>,
     save_capture: bool,
     watch_sockets: bool,
+    quality_preview: bool,
 }
 
 fn parse_args() -> Args {
@@ -44,6 +45,7 @@ fn parse_args() -> Args {
         capture: None,
         save_capture: false,
         watch_sockets: false,
+        quality_preview: false,
     };
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
@@ -60,6 +62,7 @@ fn parse_args() -> Args {
             "--capture" => args.capture = argv.next(),
             "--save-capture" => args.save_capture = true,
             "--watch-sockets" => args.watch_sockets = true,
+            "--quality-preview" => args.quality_preview = true,
             "--settle-ms" => {
                 args.settle_ms = argv
                     .next()
@@ -71,7 +74,8 @@ fn parse_args() -> Args {
                     "netdiag-slint-desktop [--connect] [--tab N] [--snapshot FILE] [--settle-ms MS]\n\
                      \t[--diagnose] [--capture IFACE] [--save-capture] [--watch-sockets]\n\n\
                      Runs the Slint UI against a daemon on this machine.\n\
-                     Tabs: 0 overview, 1 diagnose, 2 routing, 3 apps, 4 timeline\n\
+                     Tabs: 0 overview, 1 diagnose, 2 routing, 3 apps, 4 sockets, 5 capture, 6 timeline, 7 quality\n\
+                     --quality-preview fills the quality tab with sample measurements.\n\
                      --snapshot FILE renders the window to a PNG and exits."
                 );
                 std::process::exit(0);
@@ -96,6 +100,18 @@ fn main() -> anyhow::Result<()> {
     app::wire(&window, state);
 
     window.set_tab(args.tab);
+    if args.quality_preview {
+        window.set_connected(true);
+        window.set_tab(7);
+        window.set_quality(ui::QualityData {
+            network: "Android netId 101".into(),
+            phase: "Complete".into(),
+            idle: "24 ms latency · 4 ms jitter".into(),
+            download: "82.4 Mbps · 91 ms loaded · 659 RPM".into(),
+            upload: "28.1 Mbps · 184 ms loaded · 326 RPM".into(),
+            ..Default::default()
+        });
+    }
     if args.connect {
         window.invoke_connect();
     }

@@ -16,6 +16,7 @@ mod daemon;
 mod diag;
 mod ipc;
 mod probe;
+mod quality;
 mod snapshot;
 mod util;
 mod watch;

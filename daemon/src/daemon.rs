@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use rtnetlink::Handle;
-use tokio::sync::{Mutex, mpsc};
+use tokio::sync::{Mutex, Semaphore, mpsc};
 use tracing::{debug, info, warn};
 
 use crate::capture::{self, Capture};
@@ -19,6 +19,7 @@ use crate::correlate::{self, CorrelationInput};
 use crate::diag;
 use crate::ipc::session::{Responder, StreamOutcome};
 use crate::proto;
+use crate::quality;
 use crate::snapshot;
 use crate::util;
 use crate::watch::{self, EventBus};
@@ -40,6 +41,7 @@ pub struct Daemon {
     capabilities: proto::DaemonCapabilities,
     warnings: Vec<String>,
     captures: Mutex<HashMap<u64, Arc<AtomicBool>>>,
+    quality_slot: Semaphore,
     next_capture_id: AtomicU64,
 }
 
@@ -54,6 +56,7 @@ impl Daemon {
             capabilities,
             warnings,
             captures: Mutex::new(HashMap::new()),
+            quality_slot: Semaphore::new(1),
             next_capture_id: AtomicU64::new(1),
         }
     }
@@ -282,6 +285,80 @@ impl Daemon {
     }
 
     // ---- Streaming --------------------------------------------------------
+
+    pub async fn network_quality_stream(
+        self: Arc<Self>,
+        id: u64,
+        request: proto::NetworkQualityRequest,
+        responder: Responder,
+    ) -> StreamOutcome {
+        if request.net_id < 0 || request.net_id > util::FWMARK_NET_ID_MASK as i32 {
+            return StreamOutcome::failed(proto::Error::invalid("invalid network ID"), 0);
+        }
+        let _slot = match self.quality_slot.try_acquire() {
+            Ok(slot) => slot,
+            Err(_) => {
+                return StreamOutcome::failed(
+                    proto::Error::invalid("a network quality test is already running"),
+                    0,
+                );
+            }
+        };
+        let (tx, mut rx) = mpsc::unbounded_channel::<&'static str>();
+        let progress_responder = responder.clone();
+        let forwarder = tokio::spawn(async move {
+            let mut sent = 0;
+            while let Some(phase) = rx.recv().await {
+                if !progress_responder
+                    .reply(
+                        id,
+                        proto::server_frame::Body::NetworkQuality(proto::NetworkQualityProgress {
+                            payload: Some(proto::network_quality_progress::Payload::Phase(
+                                phase.into(),
+                            )),
+                        }),
+                    )
+                    .await
+                {
+                    break;
+                }
+                sent += 1;
+            }
+            sent
+        });
+        let result = quality::run(request.net_id, |phase| {
+            let _ = tx.send(phase);
+        })
+        .await;
+        let sent = forwarder.await.unwrap_or(0);
+        match result {
+            Ok(result) => {
+                responder
+                    .reply(
+                        id,
+                        proto::server_frame::Body::NetworkQuality(proto::NetworkQualityProgress {
+                            payload: Some(proto::network_quality_progress::Payload::Result(result)),
+                        }),
+                    )
+                    .await;
+                StreamOutcome::done("quality test complete", sent + 1)
+            }
+            Err(error) => {
+                let message = format!("quality test failed: {error:#}");
+                responder
+                    .reply(
+                        id,
+                        proto::server_frame::Body::NetworkQuality(proto::NetworkQualityProgress {
+                            payload: Some(proto::network_quality_progress::Payload::Error(
+                                message.clone(),
+                            )),
+                        }),
+                    )
+                    .await;
+                StreamOutcome::failed(proto::Error::internal(message), sent + 1)
+            }
+        }
+    }
 
     pub async fn diagnose_stream(
         self: Arc<Self>,
@@ -864,6 +941,7 @@ fn probe_capabilities() -> (proto::DaemonCapabilities, Vec<String>) {
             tc: netlink_route,
             raw_icmp,
             so_mark: true,
+            network_quality: true,
         },
         warnings,
     )

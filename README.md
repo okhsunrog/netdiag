@@ -81,6 +81,16 @@ the route" and "ConnectivityManager noticed" is only visible this way.
 VpnService, so a tun-based capture cannot run alongside the VPN you are trying to
 debug, and would only see what is routed into the tun anyway.
 
+**Quality** — an explicit responsiveness-under-load test using Cloudflare's
+`cf-mach` library. It measures idle TCP latency and jitter, then download and
+upload throughput, loaded latency, and round-trips per minute (RPM). It sends
+substantial traffic to Cloudflare's speed endpoint and takes roughly half a
+minute. The app never submits an AIM results report. The root daemon marks the
+test's TCP sockets for Android's active netId before connecting; hostname
+resolution still uses the daemon's system resolver, which may differ from a
+non-default network's resolver. Quality measurements are displayed separately
+from Diagnose checks and findings, and can be cancelled at any time.
+
 ### Sample output
 
 From a real device running a v4-only VPN:
@@ -191,8 +201,9 @@ netdiagd --socket @netdiag --allow-uid 10401 --expect-package dev.okhsunrog.netd
   the peer credential check is not optional. A filesystem path can be used
   instead, and is then chowned to the client uid and chmodded `0600`.
 
-The daemon **only reads.** There is no code path in it that installs a route,
-brings an interface up, or flushes a table.
+The daemon does not change device network configuration. There is no code path
+that installs a route, brings an interface up, or flushes a table. Active
+probes and the user-started quality test create network traffic.
 
 ## Building
 

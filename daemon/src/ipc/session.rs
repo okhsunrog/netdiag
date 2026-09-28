@@ -312,6 +312,12 @@ async fn dispatch(
         }
 
         // Streaming calls.
+        B::NetworkQuality(request) => {
+            spawn_stream(id, daemon, responder, registry, move |daemon, responder| {
+                Box::pin(async move { daemon.network_quality_stream(id, request, responder).await })
+            })
+            .await;
+        }
         B::Diagnose(request) => {
             spawn_stream(id, daemon, responder, registry, move |daemon, responder| {
                 Box::pin(async move { daemon.diagnose_stream(id, request, responder).await })

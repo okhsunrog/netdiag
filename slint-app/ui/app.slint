@@ -3,7 +3,7 @@ import { Palette, Style, Status, Chip, MonoText, KeyValue, Card } from "theme.sl
 import {
     ChipData, Field, CheckRow, FindingRow, InterfaceRow, RouteTableRow,
     AppRow, SocketRow, EventRow, OverviewData, AppDetailData, DiagnosisData,
-    SocketsData, CaptureData, PacketRow,
+    SocketsData, CaptureData, PacketRow, QualityData,
 } from "models.slint";
 
 // A wrapping row of chips.
@@ -339,6 +339,55 @@ component DiagnoseScreen inherits ScrollView {
                 }
             }
         }
+    }
+}
+
+component QualityScreen inherits ScrollView {
+    in property <QualityData> data;
+    callback start-test();
+    callback stop-test();
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 12px;
+        Card {
+            title: "Network quality";
+            subtitle: "Responsiveness under load";
+            vertical-stretch: 0;
+            Text {
+                text: "This test transfers substantial data for about 30 seconds. It uses Cloudflare's test server. Results stay on this device.";
+                color: Palette.on-surface-dim;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+            if root.data.network != "": KeyValue { key: "Network"; value: root.data.network; }
+            Button {
+                text: root.data.running ? "Cancel test" : "Start quality test";
+                enabled: root.data.phase != "Cancelling…";
+                clicked => {
+                    if (root.data.running) { root.stop-test(); } else { root.start-test(); }
+                }
+            }
+            if root.data.phase != "": Text {
+                text: root.data.phase;
+                color: Palette.on-surface-dim;
+                font-size: 13px;
+            }
+            if root.data.error != "": Text {
+                text: root.data.error;
+                color: Palette.fail;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+        }
+        if root.data.idle != "": Card {
+            title: "Measured response";
+            vertical-stretch: 0;
+            KeyValue { key: "Idle"; value: root.data.idle; }
+            KeyValue { key: "Download load"; value: root.data.download; mono: false; }
+            KeyValue { key: "Upload load"; value: root.data.upload; mono: false; }
+        }
+        Rectangle { vertical-stretch: 1; }
     }
 }
 
@@ -805,6 +854,7 @@ export component App inherits Window {
     in property <OverviewData> overview;
     in property <[InterfaceRow]> interfaces;
     in property <DiagnosisData> diagnosis;
+    in property <QualityData> quality;
     in property <[string]> rules;
     in property <[RouteTableRow]> route-tables;
     in property <[AppRow]> apps;
@@ -826,6 +876,8 @@ export component App inherits Window {
     callback disconnect();
     callback refresh();
     callback diagnose();
+    callback start-quality();
+    callback stop-quality();
     callback toggle-check(int);
     callback toggle-interface(int);
     callback select-app(int);
@@ -974,6 +1026,11 @@ export component App inherits Window {
                 clear-events => { root.clear-events(); }
                 toggle-socket-watch => { root.toggle-socket-watch(); }
             }
+            if root.tab == 7: QualityScreen {
+                data: root.quality;
+                start-test => { root.start-quality(); }
+                stop-test => { root.stop-quality(); }
+            }
         }
 
         // Bottom navigation.
@@ -990,7 +1047,7 @@ export component App inherits Window {
                 flex-wrap: wrap;
                 alignment: start;
                 padding: 6px;
-                spacing-horizontal: 4px;
+                spacing-horizontal: 3px;
                 spacing-vertical: 4px;
 
                 TabButton {
@@ -1004,7 +1061,7 @@ export component App inherits Window {
                     clicked => { root.tab = 1; }
                 }
                 TabButton {
-                    label: "Routing";
+                    label: "Routes";
                     selected: root.tab == 2;
                     clicked => { root.tab = 2; }
                 }
@@ -1024,9 +1081,14 @@ export component App inherits Window {
                     clicked => { root.tab = 5; }
                 }
                 TabButton {
-                    label: "Timeline";
+                    label: "Events";
                     selected: root.tab == 6;
                     clicked => { root.tab = 6; }
+                }
+                TabButton {
+                    label: "Quality";
+                    selected: root.tab == 7;
+                    clicked => { root.tab = 7; }
                 }
             }
         }
