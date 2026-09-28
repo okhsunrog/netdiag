@@ -33,6 +33,7 @@ struct Args {
     save_capture: bool,
     watch_sockets: bool,
     quality_preview: bool,
+    size: Option<(u32, u32)>,
 }
 
 fn parse_args() -> Args {
@@ -46,6 +47,7 @@ fn parse_args() -> Args {
         save_capture: false,
         watch_sockets: false,
         quality_preview: false,
+        size: None,
     };
     let mut argv = std::env::args().skip(1);
     while let Some(arg) = argv.next() {
@@ -63,6 +65,12 @@ fn parse_args() -> Args {
             "--save-capture" => args.save_capture = true,
             "--watch-sockets" => args.watch_sockets = true,
             "--quality-preview" => args.quality_preview = true,
+            "--size" => {
+                args.size = argv.next().and_then(|value| {
+                    let (width, height) = value.split_once('x')?;
+                    Some((width.parse().ok()?, height.parse().ok()?))
+                });
+            }
             "--settle-ms" => {
                 args.settle_ms = argv
                     .next()
@@ -71,7 +79,7 @@ fn parse_args() -> Args {
             }
             "-h" | "--help" => {
                 println!(
-                    "netdiag-slint-desktop [--connect] [--tab N] [--snapshot FILE] [--settle-ms MS]\n\
+                    "netdiag-slint-desktop [--connect] [--tab N] [--size WIDTHxHEIGHT] [--snapshot FILE] [--settle-ms MS]\n\
                      \t[--diagnose] [--capture IFACE] [--save-capture] [--watch-sockets]\n\n\
                      Runs the Slint UI against a daemon on this machine.\n\
                      Tabs: 0 overview, 1 diagnose, 2 routing, 3 apps, 4 sockets, 5 capture, 6 timeline, 7 quality\n\
@@ -98,6 +106,10 @@ fn main() -> anyhow::Result<()> {
     let state = app::AppState::new(std::sync::Arc::new(platform::desktop::DesktopPlatform))?;
     let window = ui::App::new()?;
     app::wire(&window, state);
+
+    if let Some((width, height)) = args.size {
+        window.window().set_size(slint::PhysicalSize::new(width, height));
+    }
 
     window.set_tab(args.tab);
     if args.quality_preview {
