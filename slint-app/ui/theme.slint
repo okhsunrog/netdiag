@@ -1,3 +1,5 @@
+import { MaterialPalette } from "@material";
+
 // Shared visual vocabulary.
 //
 // Status colours are defined here rather than taken from a widget style for
@@ -6,21 +8,21 @@
 // palette does.
 
 export global Palette {
-    in-out property <bool> dark: true;
+    out property <bool> dark: MaterialPalette.background.red < 128;
 
-    out property <brush> background: root.dark ? #14110f : #fdfbf9;
-    out property <brush> surface: root.dark ? #1e1a18 : #ffffff;
-    out property <brush> surface-alt: root.dark ? #262120 : #f4f1ef;
-    out property <brush> on-surface: root.dark ? #ece0da : #201a18;
-    out property <brush> on-surface-dim: root.dark ? #a2938c : #5c514c;
-    out property <brush> outline: root.dark ? #3a3230 : #ded3ce;
-    out property <brush> accent: root.dark ? #ffb59b : #8c4f35;
+    out property <brush> background: MaterialPalette.background;
+    out property <brush> surface: MaterialPalette.surface-container-low;
+    out property <brush> surface-alt: MaterialPalette.surface-container;
+    out property <brush> on-surface: MaterialPalette.on-surface;
+    out property <brush> on-surface-dim: MaterialPalette.on-surface-variant;
+    out property <brush> outline: MaterialPalette.outline-variant;
+    out property <brush> accent: MaterialPalette.primary;
 
     out property <brush> pass: root.dark ? #81c784 : #1b5e20;
-    out property <brush> fail: root.dark ? #ef9a9a : #b3261e;
+    out property <brush> fail: MaterialPalette.error;
     out property <brush> warn: root.dark ? #ffb74d : #8a5100;
     out property <brush> info: root.dark ? #90caf9 : #1a4d7a;
-    out property <brush> skip: root.dark ? #9aa0a6 : #5f6368;
+    out property <brush> skip: MaterialPalette.on-surface-variant;
 
     // Addresses, routing rules and socket tuples are compared character by
     // character, so they are never rendered in a proportional font.
@@ -105,7 +107,7 @@ export component Card inherits Rectangle {
     in property <string> subtitle;
 
     background: Palette.surface;
-    border-radius: 12px;
+    border-radius: 16px;
     border-width: 1px;
     border-color: Palette.outline;
 

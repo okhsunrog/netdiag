@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package netdiag.v1;
+
+option java_package = "dev.okhsunrog.netdiag.proto";
+option java_multiple_files = true;
+
+// An explicit, traffic-heavy test of responsiveness under load.
+message NetworkQualityRequest {
+  // Android Network to route the TCP sockets through. 0 uses the default route.
+  int32 net_id = 1;
+}
+
+message NetworkQualityLeg {
+  double throughput_bps = 1;
+  double loaded_latency_ms = 2;
+  double rpm = 3;
+  uint32 failed_connections = 4;
+}
+
+message NetworkQualityResult {
+  int32 net_id = 1;
+  double unloaded_latency_ms = 2;
+  double jitter_ms = 3;
+  NetworkQualityLeg download = 4;
+  NetworkQualityLeg upload = 5;
+}
+
+message NetworkQualityProgress {
+  oneof payload {
+    string phase = 1;
+    NetworkQualityResult result = 2;
+    string error = 3;
+  }
+}

@@ -100,6 +100,16 @@ export struct CaptureData {
     packets: [PacketRow],
 }
 
+export struct QualityData {
+    running: bool,
+    phase: string,
+    network: string,
+    idle: string,
+    download: string,
+    upload: string,
+    error: string,
+}
+
 export struct EventRow {
     time: string,
     source: string,

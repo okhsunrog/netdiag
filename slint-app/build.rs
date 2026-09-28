@@ -1,13 +1,13 @@
 fn main() {
-    // The widget style is pinned rather than left to the default.
-    //
-    // This app draws its own dark palette, and the handful of std-widgets it
-    // uses — Button, LineEdit, ListView, ScrollView — have to sit inside it.
-    // Upgrading from a git revision of master to the 1.18 release changed the
-    // default style, and the buttons came back light grey on a near-black
-    // window. Nothing in the app had changed; it had simply been relying on
-    // whatever the default happened to be.
-    let config = slint_build::CompilerConfiguration::new().with_style("fluent-dark".to_string());
+    // Keep standard widgets and the vendored Material components on the same
+    // visual system. Both follow the platform color scheme.
+    let config = slint_build::CompilerConfiguration::new()
+        .with_style("material".to_string())
+        .with_library_paths(std::collections::HashMap::from([(
+            "material".to_string(),
+            std::path::Path::new(&std::env::var_os("CARGO_MANIFEST_DIR").unwrap())
+                .join("material-1.1.0/material.slint"),
+        )]));
     slint_build::compile_with_config("ui/app.slint", config)
         .expect("failed to compile the Slint UI");
 }

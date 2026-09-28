@@ -1,18 +1,15 @@
 import { ScrollView, ListView, Button, LineEdit } from "std-widgets.slint";
+import { NavigationBar, NavigationRail } from "@material";
 import { Palette, Style, Status, Chip, MonoText, KeyValue, Card } from "theme.slint";
 import {
     ChipData, Field, CheckRow, FindingRow, InterfaceRow, RouteTableRow,
     AppRow, SocketRow, EventRow, OverviewData, AppDetailData, DiagnosisData,
-    SocketsData, CaptureData, PacketRow,
+    SocketsData, CaptureData, PacketRow, QualityData,
 } from "models.slint";
 
 // A wrapping row of chips.
 //
-// This is what FlexboxLayout is for: a variable number of variable-width
-// badges that must reflow onto the next line on a narrow phone. Doing it with
-// HorizontalLayout would either clip on small screens or force a fixed chip
-// count. Everything else in this UI stays on Horizontal/VerticalLayout, which
-// the docs note are simpler and faster for a single line.
+// Variable-width badges reflow onto the next line on a narrow phone.
 component ChipFlow inherits FlexboxLayout {
     in property <[ChipData]> chips;
 
@@ -26,32 +23,6 @@ component ChipFlow inherits FlexboxLayout {
     for chip in root.chips: Chip {
         text: chip.text;
         status: chip.status;
-    }
-}
-
-component TabButton inherits Rectangle {
-    in property <string> label;
-    in property <bool> selected;
-    callback clicked <=> touch.clicked;
-
-    background: root.selected ? Palette.accent.with-alpha(0.18) : transparent;
-    border-radius: 8px;
-    // Content-sized, not stretched: inside a wrapping FlexboxLayout a stretch
-    // is a flex-grow, and every tab would claim its whole line.
-    horizontal-stretch: 0;
-
-    touch := TouchArea { }
-
-    VerticalLayout {
-        padding: 6px;
-        alignment: center;
-        Text {
-            text: root.label;
-            color: root.selected ? Palette.accent : Palette.on-surface-dim;
-            font-size: 11px;
-            horizontal-alignment: center;
-            overflow: elide;
-        }
     }
 }
 
@@ -124,6 +95,7 @@ component OverviewScreen inherits ScrollView {
     VerticalLayout {
         padding: 12px;
         spacing: 12px;
+        alignment: start;
 
         HorizontalLayout {
             spacing: 8px;
@@ -225,6 +197,7 @@ component DiagnoseScreen inherits ScrollView {
     VerticalLayout {
         padding: 12px;
         spacing: 12px;
+        alignment: start;
 
         Button {
             text: root.data.running ? "Diagnosing…" : "Diagnose connection";
@@ -342,6 +315,56 @@ component DiagnoseScreen inherits ScrollView {
     }
 }
 
+component QualityScreen inherits ScrollView {
+    in property <QualityData> data;
+    callback start-test();
+    callback stop-test();
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 12px;
+        alignment: start;
+        Card {
+            title: "Network quality";
+            subtitle: "Responsiveness under load";
+            vertical-stretch: 0;
+            Text {
+                text: "This test transfers substantial data for about 30 seconds. It uses Cloudflare's test server. Results stay on this device.";
+                color: Palette.on-surface-dim;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+            if root.data.network != "": KeyValue { key: "Network"; value: root.data.network; }
+            Button {
+                text: root.data.running ? "Cancel test" : "Start quality test";
+                enabled: root.data.phase != "Cancelling…";
+                clicked => {
+                    if (root.data.running) { root.stop-test(); } else { root.start-test(); }
+                }
+            }
+            if root.data.phase != "": Text {
+                text: root.data.phase;
+                color: Palette.on-surface-dim;
+                font-size: 13px;
+            }
+            if root.data.error != "": Text {
+                text: root.data.error;
+                color: Palette.fail;
+                font-size: 13px;
+                wrap: word-wrap;
+            }
+        }
+        if root.data.idle != "": Card {
+            title: "Measured response";
+            vertical-stretch: 0;
+            KeyValue { key: "Idle"; value: root.data.idle; }
+            KeyValue { key: "Download load"; value: root.data.download; mono: false; }
+            KeyValue { key: "Upload load"; value: root.data.upload; mono: false; }
+        }
+        Rectangle { vertical-stretch: 1; }
+    }
+}
+
 component RoutingScreen inherits ScrollView {
     in property <[string]> rules;
     in property <[RouteTableRow]> tables;
@@ -349,6 +372,7 @@ component RoutingScreen inherits ScrollView {
     VerticalLayout {
         padding: 12px;
         spacing: 12px;
+        alignment: start;
 
         Card {
             title: "Policy rules";
@@ -783,18 +807,44 @@ component CaptureScreen inherits VerticalLayout {
 
 // ---- Window ----------------------------------------------------------------
 
+component MoreScreen inherits ScrollView {
+    callback selected(int);
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+        alignment: start;
+        Text {
+            text: "More tools";
+            color: Palette.on-surface;
+            font-size: 22px;
+            font-weight: 700;
+        }
+        Text {
+            text: "Explore network state and capture activity";
+            color: Palette.on-surface-dim;
+            font-size: 14px;
+        }
+        Button { text: "Routes"; height: 52px; clicked => { root.selected(2); } }
+        Button { text: "Apps"; height: 52px; clicked => { root.selected(3); } }
+        Button { text: "Sockets"; height: 52px; clicked => { root.selected(4); } }
+        Button { text: "Capture"; height: 52px; clicked => { root.selected(5); } }
+        Button { text: "Events"; height: 52px; clicked => { root.selected(6); } }
+    }
+}
+
 export component App inherits Window {
     title: "Network Inspector";
     background: Palette.background;
     default-font-size: 14px;
 
-    // A phone-shaped default. Android ignores it (the window is the screen),
-    // but the desktop harness needs a size or the window collapses to its
-    // minimum and every screen looks broken.
-    preferred-width: 420px;
-    preferred-height: 900px;
+    // Android uses its screen size. The desktop harness starts wide and can
+    // request a narrow size for mobile layout previews.
+    preferred-width: 1024px;
+    preferred-height: 800px;
     min-width: 320px;
     min-height: 480px;
+    private property <bool> use-rail: root.width >= 760px && root.height >= 760px;
 
     in-out property <int> tab: 0;
     in property <bool> connected: false;
@@ -805,6 +855,7 @@ export component App inherits Window {
     in property <OverviewData> overview;
     in property <[InterfaceRow]> interfaces;
     in property <DiagnosisData> diagnosis;
+    in property <QualityData> quality;
     in property <[string]> rules;
     in property <[RouteTableRow]> route-tables;
     in property <[AppRow]> apps;
@@ -826,6 +877,8 @@ export component App inherits Window {
     callback disconnect();
     callback refresh();
     callback diagnose();
+    callback start-quality();
+    callback stop-quality();
     callback toggle-check(int);
     callback toggle-interface(int);
     callback select-app(int);
@@ -841,192 +894,191 @@ export component App inherits Window {
 
     changed app-filter => { root.filter-changed(self.app-filter); }
 
-    VerticalLayout {
+    Rectangle {
         // Android draws the app under the status bar and the gesture bar, so
         // the window's own insets have to be honoured or the title sits behind
         // the clock and the bottom tabs behind the navigation pill.
-        padding-top: root.safe-area-insets.top;
-        padding-bottom: root.safe-area-insets.bottom;
-        padding-left: root.safe-area-insets.left;
-        padding-right: root.safe-area-insets.right;
+        x: root.safe-area-insets.left;
+        y: root.safe-area-insets.top;
+        width: root.width - root.safe-area-insets.left - root.safe-area-insets.right;
+        height: root.height - root.safe-area-insets.top - root.safe-area-insets.bottom;
 
-        // Top bar.
-        Rectangle {
-            background: Palette.surface;
-            height: 52px;
-            HorizontalLayout {
-                padding-left: 14px;
-                padding-right: 14px;
-                spacing: 8px;
-                Text {
-                    text: "Network Inspector";
-                    color: Palette.on-surface;
-                    font-size: 17px;
-                    font-weight: 700;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                    overflow: elide;
-                }
-                Button {
-                    text: root.connected ? "Disconnect" : root.connecting ? "…" : "Connect";
-                    enabled: !root.connecting;
-                    clicked => {
-                        if (root.connected) { root.disconnect(); } else { root.connect(); }
+        if root.connected && root.use-rail: NavigationRail {
+            x: 0px;
+            y: 0px;
+            width: 88px;
+            height: parent.height;
+            current-index: root.tab;
+            items: [
+                { icon: @image-url("icons/overview.svg"), text: "Overview" },
+                { icon: @image-url("icons/diagnose.svg"), text: "Diagnose" },
+                { icon: @image-url("icons/routes.svg"), text: "Routes" },
+                { icon: @image-url("icons/apps.svg"), text: "Apps" },
+                { icon: @image-url("icons/sockets.svg"), text: "Sockets" },
+                { icon: @image-url("icons/capture.svg"), text: "Capture" },
+                { icon: @image-url("icons/events.svg"), text: "Events" },
+                { icon: @image-url("icons/quality.svg"), text: "Quality" },
+            ];
+            index-changed(index) => { root.tab = index; }
+        }
+
+        content := Rectangle {
+            x: root.connected && root.use-rail ? 88px : 0px;
+            width: parent.width - self.x;
+            height: parent.height;
+
+            VerticalLayout {
+
+                // Top bar.
+                Rectangle {
+                    background: Palette.surface;
+                    height: 52px;
+                    HorizontalLayout {
+                        padding-left: 14px;
+                        padding-right: 14px;
+                        spacing: 8px;
+                        Text {
+                            text: "Network Inspector";
+                            color: Palette.on-surface;
+                            font-size: 17px;
+                            font-weight: 700;
+                            vertical-alignment: center;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        Button {
+                            text: root.connected ? "Disconnect" : root.connecting ? "…" : "Connect";
+                            enabled: !root.connecting;
+                            clicked => {
+                                if (root.connected) { root.disconnect(); } else { root.connect(); }
+                            }
+                        }
                     }
                 }
-            }
-        }
 
-        if !root.connected: VerticalLayout {
-            padding: 24px;
-            spacing: 12px;
-            alignment: center;
+                if !root.connected: VerticalLayout {
+                    padding: 24px;
+                    spacing: 12px;
+                    alignment: center;
 
-            Text {
-                text: "Not connected to the daemon";
-                color: Palette.on-surface;
-                font-size: 17px;
-                font-weight: 700;
-                horizontal-alignment: center;
-            }
-            Text {
-                text: "This app reads kernel networking state through a small root daemon. "
-                    + "Connecting starts it through su and authorizes only this app's uid.";
-                color: Palette.on-surface-dim;
-                font-size: 13px;
-                wrap: word-wrap;
-                horizontal-alignment: center;
-            }
-            if root.status-line != "": Text {
-                text: root.status-line;
-                color: Palette.on-surface-dim;
-                font-size: 12px;
-                font-family: Palette.mono;
-                wrap: word-wrap;
-                horizontal-alignment: center;
-            }
-            if root.connect-error != "": Card {
-                title: "Could not connect";
-                Text {
-                    text: root.connect-error;
-                    color: Palette.fail;
-                    font-size: 13px;
-                    wrap: word-wrap;
+                    Text {
+                        text: "Not connected to the daemon";
+                        color: Palette.on-surface;
+                        font-size: 17px;
+                        font-weight: 700;
+                        horizontal-alignment: center;
+                    }
+                    Text {
+                        text: "This app reads kernel networking state through a small root daemon. "
+                            + "Connecting starts it through su and authorizes only this app's uid.";
+                        color: Palette.on-surface-dim;
+                        font-size: 13px;
+                        wrap: word-wrap;
+                        horizontal-alignment: center;
+                    }
+                    if root.status-line != "": Text {
+                        text: root.status-line;
+                        color: Palette.on-surface-dim;
+                        font-size: 12px;
+                        font-family: Palette.mono;
+                        wrap: word-wrap;
+                        horizontal-alignment: center;
+                    }
+                    if root.connect-error != "": Card {
+                        title: "Could not connect";
+                        Text {
+                            text: root.connect-error;
+                            color: Palette.fail;
+                            font-size: 13px;
+                            wrap: word-wrap;
+                        }
+                    }
                 }
-            }
-        }
 
-        if root.connected: Rectangle {
-            vertical-stretch: 1;
-            if root.tab == 0: OverviewScreen {
-                data: root.overview;
-                interfaces: root.interfaces;
-                refresh => { root.refresh(); }
-                toggle-interface(index) => { root.toggle-interface(index); }
-            }
-            if root.tab == 1: DiagnoseScreen {
-                data: root.diagnosis;
-                diagnose => { root.diagnose(); }
-                toggle-check(index) => { root.toggle-check(index); }
-            }
-            if root.tab == 2: RoutingScreen {
-                rules: root.rules;
-                tables: root.route-tables;
-            }
-            if root.tab == 3: AppsScreen {
-                apps: root.apps;
-                detail: root.app-detail;
-                filter <=> root.app-filter;
-                select-app(index) => { root.select-app(index); }
-                clear-app => { root.clear-app(); }
-            }
-            if root.tab == 4: SocketsScreen {
-                data: root.sockets;
-                only-established: root.only-established;
-                only-apps: root.only-apps;
-                hide-listen: root.hide-listen;
-                toggle-established => {
-                    root.only-established = !root.only-established;
-                    root.sockets-filter-changed();
+                if root.connected: Rectangle {
+                    vertical-stretch: 1;
+                    Rectangle {
+                        x: max(0px, (parent.width - 900px) / 2);
+                        width: min(parent.width, 900px);
+                        height: parent.height;
+                        if root.tab == 0: OverviewScreen {
+                            data: root.overview;
+                            interfaces: root.interfaces;
+                            refresh => { root.refresh(); }
+                            toggle-interface(index) => { root.toggle-interface(index); }
+                        }
+                        if root.tab == 1: DiagnoseScreen {
+                            data: root.diagnosis;
+                            diagnose => { root.diagnose(); }
+                            toggle-check(index) => { root.toggle-check(index); }
+                        }
+                        if root.tab == 2: RoutingScreen {
+                            rules: root.rules;
+                            tables: root.route-tables;
+                        }
+                        if root.tab == 3: AppsScreen {
+                            apps: root.apps;
+                            detail: root.app-detail;
+                            filter <=> root.app-filter;
+                            select-app(index) => { root.select-app(index); }
+                            clear-app => { root.clear-app(); }
+                        }
+                        if root.tab == 4: SocketsScreen {
+                            data: root.sockets;
+                            only-established: root.only-established;
+                            only-apps: root.only-apps;
+                            hide-listen: root.hide-listen;
+                            toggle-established => {
+                                root.only-established = !root.only-established;
+                                root.sockets-filter-changed();
+                            }
+                            toggle-apps => {
+                                root.only-apps = !root.only-apps;
+                                root.sockets-filter-changed();
+                            }
+                            toggle-listen => {
+                                root.hide-listen = !root.hide-listen;
+                                root.sockets-filter-changed();
+                            }
+                            toggle-socket(index) => { root.toggle-socket(index); }
+                            refresh => { root.refresh(); }
+                        }
+                        if root.tab == 5: CaptureScreen {
+                            data: root.capture;
+                            interfaces: root.capture-interfaces;
+                            selected-interface <=> root.capture-interface;
+                            start-capture(name) => { root.start-capture(name); }
+                            stop-capture => { root.stop-capture(); }
+                            save-capture => { root.save-capture(); }
+                        }
+                        if root.tab == 6: TimelineScreen {
+                            events: root.events;
+                            watching-sockets: root.watching-sockets;
+                            clear-events => { root.clear-events(); }
+                            toggle-socket-watch => { root.toggle-socket-watch(); }
+                        }
+                        if root.tab == 7: QualityScreen {
+                            data: root.quality;
+                            start-test => { root.start-quality(); }
+                            stop-test => { root.stop-quality(); }
+                        }
+                        if root.tab == 8: MoreScreen {
+                            selected(index) => { root.tab = index; }
+                        }
+                    }
                 }
-                toggle-apps => {
-                    root.only-apps = !root.only-apps;
-                    root.sockets-filter-changed();
-                }
-                toggle-listen => {
-                    root.hide-listen = !root.hide-listen;
-                    root.sockets-filter-changed();
-                }
-                toggle-socket(index) => { root.toggle-socket(index); }
-                refresh => { root.refresh(); }
-            }
-            if root.tab == 5: CaptureScreen {
-                data: root.capture;
-                interfaces: root.capture-interfaces;
-                selected-interface <=> root.capture-interface;
-                start-capture(name) => { root.start-capture(name); }
-                stop-capture => { root.stop-capture(); }
-                save-capture => { root.save-capture(); }
-            }
-            if root.tab == 6: TimelineScreen {
-                events: root.events;
-                watching-sockets: root.watching-sockets;
-                clear-events => { root.clear-events(); }
-                toggle-socket-watch => { root.toggle-socket-watch(); }
-            }
-        }
 
-        // Bottom navigation.
-        //
-        // Seven tabs fit one row on a Pixel-sized screen and do not at the
-        // 320px this window declares as its minimum, so the bar wraps instead
-        // of clipping. That is the whole argument for Flexbox here: one piece
-        // of markup that is a single row when there is room and two when there
-        // is not, rather than a layout chosen per form factor.
-        if root.connected: Rectangle {
-            background: Palette.surface;
-            nav := FlexboxLayout {
-                flex-direction: row;
-                flex-wrap: wrap;
-                alignment: start;
-                padding: 6px;
-                spacing-horizontal: 4px;
-                spacing-vertical: 4px;
-
-                TabButton {
-                    label: "Overview";
-                    selected: root.tab == 0;
-                    clicked => { root.tab = 0; }
-                }
-                TabButton {
-                    label: "Diagnose";
-                    selected: root.tab == 1;
-                    clicked => { root.tab = 1; }
-                }
-                TabButton {
-                    label: "Routing";
-                    selected: root.tab == 2;
-                    clicked => { root.tab = 2; }
-                }
-                TabButton {
-                    label: "Apps";
-                    selected: root.tab == 3;
-                    clicked => { root.tab = 3; }
-                }
-                TabButton {
-                    label: "Sockets";
-                    selected: root.tab == 4;
-                    clicked => { root.tab = 4; }
-                }
-                TabButton {
-                    label: "Capture";
-                    selected: root.tab == 5;
-                    clicked => { root.tab = 5; }
-                }
-                TabButton {
-                    label: "Timeline";
-                    selected: root.tab == 6;
-                    clicked => { root.tab = 6; }
+                if root.connected && !root.use-rail: NavigationBar {
+                    current-index: root.tab == 0 ? 0 : root.tab == 1 ? 1 : root.tab == 7 ? 2 : 3;
+                    items: [
+                        { icon: @image-url("icons/overview.svg"), text: "Overview" },
+                        { icon: @image-url("icons/diagnose.svg"), text: "Diagnose" },
+                        { icon: @image-url("icons/quality.svg"), text: "Quality" },
+                        { icon: @image-url("icons/more.svg"), text: "More" },
+                    ];
+                    index-changed(index) => {
+                        root.tab = index == 0 ? 0 : index == 1 ? 1 : index == 2 ? 7 : 8;
+                    }
                 }
             }
         }

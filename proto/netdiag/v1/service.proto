@@ -36,6 +36,7 @@ import "netdiag/v1/android.proto";
 import "netdiag/v1/event.proto";
 import "netdiag/v1/diag.proto";
 import "netdiag/v1/capture.proto";
+import "netdiag/v1/quality.proto";
 
 option java_package = "dev.okhsunrog.netdiag.proto";
 option java_multiple_files = true;
@@ -60,6 +61,7 @@ message DaemonCapabilities {
   bool tc = 8;
   bool raw_icmp = 9;
   bool so_mark = 10;
+  bool network_quality = 11;
 }
 
 message HelloResponse {
@@ -275,9 +277,9 @@ message ClientFrame {
     StopCaptureRequest stop_capture = 16;
     PushFrameworkEventRequest push_framework_event = 17;
     CancelRequest cancel = 18;
+    NetworkQualityRequest network_quality = 50;
   }
 
-  // 19-49 reserved for future unary/streaming calls.
   reserved 19 to 49;
 }
 
@@ -304,6 +306,7 @@ message ServerFrame {
     PushFrameworkEventResponse push_framework_event = 18;
     CancelResponse cancel = 19;
     StreamEnd stream_end = 20;
+    NetworkQualityProgress network_quality = 50;
   }
 
   reserved 21 to 49;
